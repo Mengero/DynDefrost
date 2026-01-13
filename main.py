@@ -5,17 +5,32 @@ Dynamic Defrost Model - Main Script
 """
 
 import matplotlib.pyplot as plt
-from data_loader import load_defrost_data
+from data_loader import load_defrost_data, get_frost_properties
+from model_init import initialize_model
 
 
 def main():
     """Main entry point for the dynamic defrost model."""
-    loader, time, temperature = load_defrost_data()
-    loader.calculate_heating_rate()
+    # ===== User Parameters =====
+    data_file = "55min_40deg_83%_12C.txt"
+    n_layers = 4
+    # ===========================
+    
+    loader, time, temperature = load_defrost_data(data_file)
+    frost_props = get_frost_properties(data_file)
+    
+    model = initialize_model(
+        n_layers=n_layers,
+        frost_thickness=frost_props['thickness'],
+        porosity=frost_props['porosity'],
+        T_initial=temperature[0]
+    )
+    
     loader.plot()
     plt.show()
-    return time, temperature
+    
+    return time, temperature, frost_props, model
 
 
 if __name__ == "__main__":
-    time, temperature = main()
+    time, temperature, frost_props, model = main()

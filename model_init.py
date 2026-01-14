@@ -57,6 +57,10 @@ class DefrostModel:
         self.alpha_ice = None      # Volume fraction of ice [-]
         self.alpha_water = None    # Volume fraction of water [-]
         self.alpha_air = None      # Volume fraction of air [-]
+        self.alpha_ice_initial = None  # Initial volume fraction of ice (for thermal conductivity calculation)
+        
+        # Thermal conductivity model parameters
+        self.f_ini = 1.0 / 3.0     # Initial weighting factor for parallel-series model
         
         # Boundary conditions
         self.T_surface = None      # Surface temperature (heated side)
@@ -78,6 +82,9 @@ class DefrostModel:
         self.alpha_water = np.zeros(n)
         self.alpha_air = np.full(n, self.porosity)
         
+        # Store initial ice volume fraction for thermal conductivity calculation
+        self.alpha_ice_initial = self.alpha_ice.copy()
+        
         # Calculate effective properties
         self._calculate_effective_properties()
         
@@ -85,27 +92,221 @@ class DefrostModel:
         print(f"  Layer thickness: {self.dx[0]*1000:.4f} mm each")
         print(f"  Initial volume fractions: alpha_ice={self.alpha_ice[0]:.3f}, alpha_water={self.alpha_water[0]:.3f}, alpha_air={self.alpha_air[0]:.3f}")
         
+    def calculate_specific_heat(self):
+        """
+        Calculate the specific heat capacity for each layer.
+        
+        Based on the equation:
+        C_p,A = α_ice,A C_p,ice,A + α_H2O,A C_p,H2O,A + α_air,A C_p,air,A
+        
+        where:
+        C_p,ice,A = c_p,ice ρ_ice δ_A
+        C_p,H2O,A = c_p,H2O ρ_H2O δ_A
+        C_p,air,A = c_p,air ρ_air δ_A
+        
+        This function should be called at every time step as volume fractions
+        change during the defrost process.
+        
+        Returns
+        -------
+        numpy.ndarray
+            Specific heat capacity per unit mass for each layer [J/(kg·K)]
+        """
+        # Calculate volumetric heat capacity components for each layer
+        # C_p,ice,A = c_p,ice * ρ_ice * δ_A
+        C_p_ice_layer = self.cp_ice * self.rho_ice * self.dx
+        # C_p,H2O,A = c_p,H2O * ρ_H2O * δ_A
+        C_p_water_layer = self.cp_water * self.rho_water * self.dx
+        # C_p,air,A = c_p,air * ρ_air * δ_A
+        C_p_air_layer = self.cp_air * self.rho_air * self.dx
+        
+        # Calculate volumetric heat capacity for each layer
+        # C_p,A = α_ice,A * C_p,ice,A + α_H2O,A * C_p,H2O,A + α_air,A * C_p,air,A
+        C_p_volumetric = (self.alpha_ice * C_p_ice_layer + 
+                         self.alpha_water * C_p_water_layer + 
+                         self.alpha_air * C_p_air_layer)
+        
+        # Calculate effective density for each layer
+        rho_eff = (self.alpha_ice * self.rho_ice + 
+                  self.alpha_water * self.rho_water + 
+                  self.alpha_air * self.rho_air)
+        
+        # Convert to specific heat per unit mass: c_p,A = C_p,A / (ρ_A * δ_A)
+        # Since C_p,A already includes δ_A, we divide by (ρ_A * δ_A)
+        self.cp = C_p_volumetric / (rho_eff * self.dx)
+        
+        # Store effective density
+        self.rho = rho_eff
+        
+        return self.cp
+    
+    def calculate_thermal_conductivity(self):
+        """
+        Calculate the effective thermal conductivity for each layer.
+        
+        Based on the combined parallel-series model:
+        k_eff = f k_p + (1 - f) k_s
+        
+        where:
+        k_p = α_ice k_ice + α_H2O k_H2O + α_air k_air  (parallel model)
+        k_s = 1 / (α_ice / k_ice + α_H2O / k_H2O + α_air / k_air)  (series model)
+        f = f_ini * (α_ice / α_ice,initial),  f_ini = 1/3
+        
+        This function should be called at every time step as volume fractions
+        change during the defrost process.
+        
+        Returns
+        -------
+        numpy.ndarray
+            Effective thermal conductivity for each layer [W/(m·K)]
+        """
+        # Calculate parallel thermal conductivity for each layer
+        # k_p = α_ice * k_ice + α_H2O * k_H2O + α_air * k_air
+        k_parallel = (self.alpha_ice * self.k_ice + 
+                     self.alpha_water * self.k_water + 
+                     self.alpha_air * self.k_air)
+        
+        # Calculate series thermal conductivity for each layer
+        # k_s = 1 / (α_ice / k_ice + α_H2O / k_H2O + α_air / k_air)
+        # Avoid division by zero by using np.where or ensuring denominators are non-zero
+        k_series_denom = (self.alpha_ice / self.k_ice + 
+                          self.alpha_water / self.k_water + 
+                          self.alpha_air / self.k_air)
+        k_series = 1.0 / k_series_denom
+        
+        # Calculate weighting factor f for each layer
+        # f = f_ini * (α_ice / α_ice,initial)
+        # Avoid division by zero if initial ice fraction is zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            f = self.f_ini * (self.alpha_ice / self.alpha_ice_initial)
+            # If initial ice fraction was zero, set f to 0
+            f = np.where(self.alpha_ice_initial > 0, f, 0.0)
+            # Ensure f is between 0 and 1
+            f = np.clip(f, 0.0, 1.0)
+        
+        # Calculate effective thermal conductivity
+        # k_eff = f * k_p + (1 - f) * k_s
+        self.k = f * k_parallel + (1.0 - f) * k_series
+        
+        return self.k
+    
+    def calculate_thermal_resistance(self):
+        """
+        Calculate the effective thermal resistance between adjacent layers.
+        
+        For the interface between layer 0 and layer 1:
+        R_0,1 = δ_0 / (2 * k_0,eff)
+        
+        For interfaces between layer A and A+1 (A >= 1):
+        R_A,A+1 = (δ_A + δ_A+1) / (2 * k_A,eff)
+        
+        This function should be called at every time step as thermal conductivity
+        and layer thicknesses may change during the defrost process.
+        
+        Returns
+        -------
+        numpy.ndarray
+            Thermal resistance between layers [K·m²/W]
+            Array has length (n_layers - 1), with R[i] being the resistance
+            between layer i and layer i+1
+        """
+        if self.k is None or self.dx is None:
+            raise ValueError("Thermal conductivity and layer thicknesses must be calculated first")
+        
+        n_interfaces = self.n_layers - 1
+        R = np.zeros(n_interfaces)
+        
+        # For interface between layer 0 and layer 1: R = δ_0 / (2 * k_0,eff)
+        R[0] = self.dx[0] / (2.0 * self.k[0])
+        
+        # For interfaces between layer A and A+1 (A >= 1): R = (δ_A + δ_A+1) / (2 * k_A,eff)
+        for i in range(1, n_interfaces):
+            R[i] = (self.dx[i] + self.dx[i+1]) / (2.0 * self.k[i])
+        
+        return R
+    
+    def calculate_heat_flux_between_layers(self):
+        """
+        Calculate the heat flux between adjacent layers.
+        
+        For interfaces between layer A and A+1 (A >= 0):
+        q''_{A,A+1} = (T_A - T_{A+1}) / R_{A,A+1}
+        
+        This function should be called at every time step as temperatures
+        and thermal resistances may change during the defrost process.
+        
+        Returns
+        -------
+        numpy.ndarray
+            Heat flux between layers [W/m²]
+            Array has length (n_layers - 1), with q[i] being the heat flux
+            from layer i to layer i+1
+        """
+        if self.T is None:
+            raise ValueError("Layer temperatures must be set first")
+        
+        # Calculate thermal resistances
+        R = self.calculate_thermal_resistance()
+        
+        # Calculate heat flux for each interface
+        n_interfaces = self.n_layers - 1
+        q = np.zeros(n_interfaces)
+        
+        for i in range(n_interfaces):
+            q[i] = (self.T[i] - self.T[i+1]) / R[i]
+        
+        return q
+    
+    def calculate_total_heat_input(self, T_wall=None):
+        """
+        Calculate the total heat input at the boundary (surface).
+        
+        q'' = (T_w - T_0) / R_0
+        
+        where:
+        R_0 = δ_0 / (2 * k_0,eff)
+        
+        Parameters
+        ----------
+        T_wall : float, optional
+            Wall/surface temperature [°C]. If None, uses self.T_surface
+        
+        Returns
+        -------
+        float
+            Total heat input at the boundary [W/m²]
+        """
+        if self.T is None:
+            raise ValueError("Layer temperatures must be set first")
+        if self.k is None or self.dx is None:
+            raise ValueError("Thermal conductivity and layer thicknesses must be calculated first")
+        
+        # Use provided T_wall or self.T_surface
+        if T_wall is None:
+            if self.T_surface is None:
+                raise ValueError("Wall temperature must be provided or set via set_boundary_conditions()")
+            T_wall = self.T_surface
+        
+        # Calculate R_0 = δ_0 / (2 * k_0,eff)
+        R_0 = self.dx[0] / (2.0 * self.k[0])
+        
+        # Calculate heat flux: q'' = (T_w - T_0) / R_0
+        q_total = (T_wall - self.T[0]) / R_0
+        
+        return q_total
+    
     def _calculate_effective_properties(self):
         """Calculate effective properties for each layer based on volume fractions."""
-        # Effective density (volume-weighted average)
+        # Calculate effective density (volume-weighted average)
         self.rho = (self.alpha_ice * self.rho_ice + 
                     self.alpha_water * self.rho_water + 
                     self.alpha_air * self.rho_air)
         
-        # Effective specific heat (mass-weighted average)
-        mass_ice = self.alpha_ice * self.rho_ice
-        mass_water = self.alpha_water * self.rho_water
-        mass_air = self.alpha_air * self.rho_air
-        total_mass = mass_ice + mass_water + mass_air
+        # Use the new specific heat calculation method
+        self.calculate_specific_heat()
         
-        self.cp = (mass_ice * self.cp_ice + 
-                   mass_water * self.cp_water + 
-                   mass_air * self.cp_air) / total_mass
-        
-        # Effective thermal conductivity (parallel model)
-        self.k = (self.alpha_ice * self.k_ice + 
-                  self.alpha_water * self.k_water + 
-                  self.alpha_air * self.k_air)
+        # Use the new thermal conductivity calculation method
+        self.calculate_thermal_conductivity()
         
     def set_initial_temperature(self, T_initial):
         """

@@ -9,6 +9,8 @@ according to enthalpy zones (solid, mushy, liquid).
 """
 
 import numpy as np
+from scipy.sparse import diags
+from scipy.sparse.linalg import spsolve
 from model_init import DefrostModel
 
 
@@ -19,7 +21,7 @@ class DefrostSolver:
     Uses fully implicit (backward Euler) method for stability with large gradients.
     """
     
-    def __init__(self, model, dt=0.1):
+    def __init__(self, model, dt=0.1, method='explicit'):
         """
         Initialize the defrost solver.
         
@@ -29,9 +31,19 @@ class DefrostSolver:
             Initialized defrost model
         dt : float, optional
             Time step [s]. Default: 0.1
+        method : str, optional
+            Solver method: 'explicit' or 'implicit'. Default: 'explicit'
         """
         self.model = model
         self.dt = dt
+        self.method = method.lower()
+        
+        if self.method not in ['explicit', 'implicit']:
+            raise ValueError(f"Method must be 'explicit' or 'implicit', got '{method}'")
+        
+        # Implicit solver parameters
+        self.max_iter = 20
+        self.tolerance = 1e-6
         
         # Enthalpy thresholds for phase change
         # L_f: enthalpy at start of melting (ice at 0°C) = 0 [J/kg]
@@ -85,11 +97,10 @@ class DefrostSolver:
         """
         Solve one time step using enthalpy-based approach.
         
-        Steps:
-        1. Calculate heat fluxes between layers
-        2. Update enthalpy: h_A^(t+Δt) = h_A^t + (Δt / m'') * (q_in'' - q_out'')
-        3. Update temperature based on enthalpy zones
-        4. Update volume fractions based on enthalpy
+        Can use either explicit or implicit method based on self.method.
+        
+        Explicit: q evaluated at time t
+        Implicit: q evaluated at time t+Δt (requires iteration)
         
         Parameters
         ----------
@@ -100,6 +111,17 @@ class DefrostSolver:
         -------
         bool
             True if successful, False otherwise
+        """
+        if self.method == 'explicit':
+            return self._solve_time_step_explicit(T_surface)
+        else:
+            return self._solve_time_step_implicit(T_surface)
+    
+    def _solve_time_step_explicit(self, T_surface):
+        """
+        Explicit solver: heat fluxes evaluated at current time t.
+        
+        h^(t+Δt) = h^t + (Δt / m'') * q^t
         """
         # Update boundary condition
         self.model.T_surface = T_surface
@@ -112,37 +134,105 @@ class DefrostSolver:
         self.model.calculate_specific_heat()
         self.model.calculate_thermal_conductivity()
         
-        # Step 1: Calculate heat fluxes
-        q_fluxes = self._calculate_heat_fluxes(T_surface)
+        # Step 1: Calculate heat fluxes (EXPLICIT: using T^t)
+        # Note: Uses current temperatures self.model.T (T^t)
+        q_fluxes = self._calculate_heat_fluxes_general(T_surface, self.model.T)
         
-        # Step 2: Update enthalpy for each layer
-        # h_A^(t+Δt) = h_A^t + (Δt / m'') * (q_in'' - q_out'')
-        # where m'' = ρ * dx is mass per unit area [kg/m²]
+        # Step 2: Update enthalpy for each layer (EXPLICIT)
+        # h_A^(t+Δt) = h_A^t + (Δt / m'') * (q_in'' - q_out'')^t
         for i in range(self.model.n_layers):
-            m_double_prime = self.model.rho[i] * self.model.dx[i]  # Mass per unit area [kg/m²]
+            m_double_prime = self.model.rho[i] * self.model.dx[i]
             
             if m_double_prime > 0:
-                # Net heat flux into layer i [W/m²]
                 q_net = q_fluxes['in'][i] - q_fluxes['out'][i]
-                
-                # Update specific enthalpy [J/kg]
-                # Energy input = q_net * dt [J/m²]
-                # Specific enthalpy change = (q_net * dt) / m'' [J/kg]
                 self.h[i] = h_old[i] + (self.dt / m_double_prime) * q_net
             else:
                 self.h[i] = h_old[i]
         
-        # Step 3: Update temperature based on enthalpy
+        # Step 3-5: Update temperature, volume fractions, and properties
         self._update_temperature_from_enthalpy(h_old)
-        
-        # Step 4: Update volume fractions based on enthalpy
         self._update_volume_fractions_from_enthalpy()
-        
-        # Step 5: Recalculate properties with new volume fractions
         self.model.calculate_specific_heat()
         self.model.calculate_thermal_conductivity()
         
-        # Update volumetric enthalpy: H = h * ρ
+        # Update volumetric enthalpy
+        for i in range(self.model.n_layers):
+            self.model.H[i] = self.h[i] * self.model.rho[i]
+        
+        return True
+    
+    def _solve_time_step_implicit(self, T_surface):
+        """
+        Implicit solver: heat fluxes evaluated at future time t+Δt.
+        
+        h^(t+Δt) = h^t + (Δt / m'') * q^(t+Δt)
+        
+        Since q^(t+Δt) depends on T^(t+Δt), and T^(t+Δt) depends on h^(t+Δt),
+        we need to solve this iteratively.
+        
+        Uses Picard iteration (fixed-point iteration).
+        """
+        # Update boundary condition
+        self.model.T_surface = T_surface
+        
+        # Store old state
+        h_old = self.h.copy()
+        T_old = self.model.T.copy()
+        
+        # Initial guess: use explicit step as starting point
+        h_new = h_old.copy()
+        T_new = T_old.copy()
+        
+        # Iterate until convergence
+        for iteration in range(self.max_iter):
+            # Store previous iteration values
+            h_prev = h_new.copy()
+            T_prev = T_new.copy()
+            
+            # Update model state for this iteration
+            self.model.T = T_new.copy()
+            self.h = h_new.copy()
+            
+            # Update properties based on current guess
+            self._update_volume_fractions_from_enthalpy()
+            self.model.calculate_specific_heat()
+            self.model.calculate_thermal_conductivity()
+            
+            # Calculate heat fluxes (IMPLICIT: using T^(t+Δt))
+            # Note: Uses future temperatures T_new (T^(t+Δt))
+            q_fluxes = self._calculate_heat_fluxes_general(T_surface, T_new)
+            
+            # Update enthalpy: h^(t+Δt) = h^t + (Δt / m'') * q^(t+Δt)
+            for i in range(self.model.n_layers):
+                m_double_prime = self.model.rho[i] * self.model.dx[i]
+                
+                if m_double_prime > 0:
+                    q_net = q_fluxes['in'][i] - q_fluxes['out'][i]
+                    h_new[i] = h_old[i] + (self.dt / m_double_prime) * q_net
+                else:
+                    h_new[i] = h_old[i]
+            
+            # Update temperature from new enthalpy
+            self.h = h_new.copy()
+            self._update_temperature_from_enthalpy(h_old)
+            T_new = self.model.T.copy()
+            
+            # Check convergence
+            max_change_h = np.max(np.abs(h_new - h_prev))
+            max_change_T = np.max(np.abs(T_new - T_prev))
+            
+            if max_change_h < self.tolerance and max_change_T < self.tolerance:
+                # Converged!
+                self.h = h_new
+                self.model.T = T_new
+                break
+        
+        # Final update of properties
+        self._update_volume_fractions_from_enthalpy()
+        self.model.calculate_specific_heat()
+        self.model.calculate_thermal_conductivity()
+        
+        # Update volumetric enthalpy
         for i in range(self.model.n_layers):
             self.model.H[i] = self.h[i] * self.model.rho[i]
         
@@ -150,7 +240,9 @@ class DefrostSolver:
     
     def _calculate_heat_fluxes(self, T_surface):
         """
-        Calculate heat fluxes into and out of each layer.
+        Calculate heat fluxes using CURRENT temperatures (for explicit method).
+        
+        This is a wrapper that calls the general function with self.model.T (T^t).
         
         Parameters
         ----------
@@ -162,36 +254,84 @@ class DefrostSolver:
         dict
             Dictionary with 'in' and 'out' arrays of heat fluxes [W/m²]
         """
+        # EXPLICIT: Use current temperatures (T^t)
+        return self._calculate_heat_fluxes_general(T_surface, self.model.T)
+    
+    def _calculate_heat_fluxes_implicit(self, T_surface, T):
+        """
+        Calculate heat fluxes using PROVIDED temperatures (for implicit method).
+        
+        This allows us to evaluate heat fluxes at t+Δt by passing T^(t+Δt).
+        This is just an alias for clarity - calls the general function.
+        
+        Parameters
+        ----------
+        T_surface : float
+            Surface temperature [°C]
+        T : numpy.ndarray
+            Layer temperatures to use for flux calculation [°C]
+        
+        Returns
+        -------
+        dict
+            Dictionary with 'in' and 'out' arrays of heat fluxes [W/m²]
+        """
+        # IMPLICIT: Use provided temperatures (T^(t+Δt))
+        return self._calculate_heat_fluxes_general(T_surface, T)
+    
+    def _calculate_heat_fluxes_general(self, T_surface, T):
+        """
+        General function to calculate heat fluxes using any temperature array.
+        
+        This is the core implementation used by both explicit and implicit methods.
+        The difference is which temperatures are passed:
+        - Explicit: passes T^t (current temperatures)
+        - Implicit: passes T^(t+Δt) (future temperatures)
+        
+        Parameters
+        ----------
+        T_surface : float
+            Surface temperature [°C]
+        T : numpy.ndarray
+            Layer temperatures to use for flux calculation [°C]
+            For explicit: T = self.model.T (T^t)
+            For implicit: T = T_new (T^(t+Δt))
+        
+        Returns
+        -------
+        dict
+            Dictionary with 'in' and 'out' arrays of heat fluxes [W/m²]
+        """
         n = self.model.n_layers
         q_in = np.zeros(n)
         q_out = np.zeros(n)
         
-        # Calculate thermal resistances
+        # Calculate thermal resistances (using current properties)
         R = self.model.calculate_thermal_resistance()
         
         # Layer 0: heat input from surface
         R_surface = self.model.dx[0] / (2.0 * self.model.k[0])
-        q_surface = (T_surface - self.model.T[0]) / R_surface
+        q_surface = (T_surface - T[0]) / R_surface
         q_in[0] = q_surface
         
         # Heat flux from layer 0 to layer 1
         if n > 1:
-            q_01 = (self.model.T[0] - self.model.T[1]) / R[0]
+            q_01 = (T[0] - T[1]) / R[0]
             q_out[0] = q_01
             q_in[1] = q_01
         
         # Interior layers
         for i in range(1, n - 1):
             # Heat flux from layer i-1 to i
-            q_in[i] = (self.model.T[i-1] - self.model.T[i]) / R[i-1]
+            q_in[i] = (T[i-1] - T[i]) / R[i-1]
             
             # Heat flux from layer i to i+1
-            q_out[i] = (self.model.T[i] - self.model.T[i+1]) / R[i]
+            q_out[i] = (T[i] - T[i+1]) / R[i]
         
         # Last layer: only heat input from previous layer
         if n > 1:
             i = n - 1
-            q_in[i] = (self.model.T[i-1] - self.model.T[i]) / R[i-1]
+            q_in[i] = (T[i-1] - T[i]) / R[i-1]
             # Assume adiabatic boundary at the end (no heat output)
             q_out[i] = 0.0
         

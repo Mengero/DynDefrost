@@ -323,10 +323,44 @@ class DefrostModel:
         print(f"  Initial enthalpy: {self.H[0]:.2e} J/m³")
         
     def _calculate_enthalpy(self):
-        """Calculate enthalpy for each layer based on temperature and composition."""
-        # Reference: H = 0 at T = 0°C for ice
-        # H = rho * cp * T for sensible heat (simplified, no latent heat stored yet)
-        self.H = self.rho * self.cp * self.T
+        """
+        Calculate volumetric enthalpy for each layer based on temperature and composition.
+        
+        Uses component-based enthalpy calculation:
+        h_A = (α_ice * ρ_ice * h_ice + α_H2O * ρ_H2O * h_H2O + α_air * ρ_air * h_air) / ρ_A
+        where h_component = cp_component * (T_K - T_ref_K)
+        
+        Then H = h_A * ρ_A (volumetric enthalpy)
+        
+        Note: cp values are in J/(kg·K), so we must use Kelvin temperature.
+        Using initial temperature as reference (H = 0 at initial state).
+        """
+        # Reference: Use initial temperature as reference (H = 0 at initial state)
+        # For now, we'll use 0°C as reference, but this should be consistent with solver
+        T_ref_K = 273.15  # Reference temperature [K] (0°C)
+        T_K = self.T + 273.15  # Convert from °C to K
+        
+        # Calculate component enthalpies
+        h_ice = self.cp_ice * (T_K - T_ref_K)
+        h_H2O = self.cp_water * (T_K - T_ref_K)
+        h_air = self.cp_air * (T_K - T_ref_K)
+        
+        # Calculate mixture specific enthalpy for each layer
+        # h_A = (α_ice * ρ_ice * h_ice + α_H2O * ρ_H2O * h_H2O + α_air * ρ_air * h_air) / ρ_A
+        numerator = (self.alpha_ice * self.rho_ice * h_ice + 
+                    self.alpha_water * self.rho_water * h_H2O + 
+                    self.alpha_air * self.rho_air * h_air)
+        
+        # Calculate mixture density
+        rho_A = (self.alpha_ice * self.rho_ice + 
+                 self.alpha_water * self.rho_water + 
+                 self.alpha_air * self.rho_air)
+        
+        # Calculate mixture specific enthalpy
+        h_A = np.where(rho_A > 0, numerator / rho_A, 0.0)
+        
+        # Convert to volumetric enthalpy: H = h_A * ρ_A
+        self.H = h_A * rho_A
         
     def set_boundary_conditions(self, T_surface, T_ambient=None):
         """

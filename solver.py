@@ -64,6 +64,25 @@ class DefrostSolver:
         self.temperature_history = []
         self.enthalpy_history = []
         self.volume_fraction_history = []
+        
+        # Store previous time step volume fractions for timewise updates
+        self.alpha_ice_prev = None
+        self.alpha_water_prev = None
+        self.alpha_air_prev = None
+        
+        # Store mass per unit area for ice and water (for second update)
+        self.m_double_prime_ice = None  # Mass per unit area of ice [kg/m²]
+        self.m_double_prime_water = None  # Mass per unit area of water [kg/m²]
+        
+        # Shrinkage model parameters
+        self.sigma = 0.072  # Surface tension [N/m] (water-air at 0°C)
+        self.eta_0 = 1.0e7  # Base viscosity [Pa·s]
+        self.b = 3.0  # Structural constant (typically 2-4)
+        self.C_wet = 15.0  # Lubricant constant
+        self.d_ice_initial = 1e-4  # Initial ice grain diameter [m] (10 microns, typical)
+        
+        # Store initial ice grain diameter per layer
+        self.d_ice_i = np.full(model.n_layers, self.d_ice_initial)
     
     def _calculate_mixture_enthalpy(self, T_K, T_ref_K, alpha_ice, alpha_water, alpha_air):
         """
@@ -231,6 +250,17 @@ class DefrostSolver:
         for i in range(n):
             self.h[i] = 0.0
         
+        # Initialize previous time step volume fractions
+        self.alpha_ice_prev = self.model.alpha_ice.copy()
+        self.alpha_water_prev = self.model.alpha_water.copy()
+        self.alpha_air_prev = self.model.alpha_air.copy()
+        
+        # Initialize mass per unit area for ice and water
+        # m''_ice = α_ice * ρ_ice * δ_A
+        # m''_water = α_water * ρ_water * δ_A
+        self.m_double_prime_ice = self.model.alpha_ice * self.model.rho_ice * self.model.dx
+        self.m_double_prime_water = self.model.alpha_water * self.model.rho_water * self.model.dx
+        
     def solve_time_step(self, T_surface):
         """
         Solve one time step using enthalpy-based approach.
@@ -287,15 +317,33 @@ class DefrostSolver:
             else:
                 self.h[i] = h_old[i]
         
-        # Step 3-5: Update temperature, volume fractions, and properties
+        # Step 3: Update temperature based on enthalpy
         self._update_temperature_from_enthalpy(h_old)
-        self._update_volume_fractions_from_enthalpy_first()
+        
+        # Step 4: Update volume fractions based on heat flux (using previous time step)
+        # This uses the equations: α^(t,1) = α^t - (Δt * q_net) / (h_sl * ρ) * δ
+        self._update_volume_fractions_from_heat_flux_first(q_fluxes)
+        
+        # Step 5: Calculate layer shrinkage (thickness reduction)
+        # This uses: 1/δ_A * d(δ_A)/dt = -σ / (η_eff * r_pore)
+        self._calculate_layer_shrinkage()
+        
+        # Step 6: Second volume fraction update based on mass per unit area and new thickness
+        # This recalculates volume fractions using mass conservation after thickness change
+        self._update_volume_fractions_second(q_fluxes)
+        
+        # Step 7: Recalculate properties with new volume fractions and thicknesses
         self.model.calculate_specific_heat()
         self.model.calculate_thermal_conductivity()
         
         # Update volumetric enthalpy
         for i in range(self.model.n_layers):
             self.model.H[i] = self.h[i] * self.model.rho[i]
+        
+        # Store current volume fractions as previous for next time step
+        self.alpha_ice_prev = self.model.alpha_ice.copy()
+        self.alpha_water_prev = self.model.alpha_water.copy()
+        self.alpha_air_prev = self.model.alpha_air.copy()
         
         return True
     
@@ -331,11 +379,6 @@ class DefrostSolver:
             self.model.T = T_new.copy()
             self.h = h_new.copy()
             
-            # Update properties based on current guess
-            self._update_volume_fractions_from_enthalpy_first()
-            self.model.calculate_specific_heat()
-            self.model.calculate_thermal_conductivity()
-            
             # Calculate heat fluxes (IMPLICIT: using T^(t+Δt))
             # Note: Uses future temperatures T_new (T^(t+Δt))
             q_fluxes = self._calculate_heat_fluxes_general(T_surface, T_new)
@@ -355,6 +398,19 @@ class DefrostSolver:
             self._update_temperature_from_enthalpy(h_old)
             T_new = self.model.T.copy()
             
+            # Update volume fractions based on heat flux (using previous time step)
+            self._update_volume_fractions_from_heat_flux_first(q_fluxes)
+            
+            # Calculate layer shrinkage (thickness reduction)
+            self._calculate_layer_shrinkage()
+            
+            # Second volume fraction update based on mass per unit area and new thickness
+            self._update_volume_fractions_second(q_fluxes)
+            
+            # Update properties based on current guess
+            self.model.calculate_specific_heat()
+            self.model.calculate_thermal_conductivity()
+            
             # Check convergence
             max_change_h = np.max(np.abs(h_new - h_prev))
             max_change_T = np.max(np.abs(T_new - T_prev))
@@ -366,13 +422,17 @@ class DefrostSolver:
                 break
         
         # Final update of properties
-        self._update_volume_fractions_from_enthalpy_first()
         self.model.calculate_specific_heat()
         self.model.calculate_thermal_conductivity()
         
         # Update volumetric enthalpy
         for i in range(self.model.n_layers):
             self.model.H[i] = self.h[i] * self.model.rho[i]
+        
+        # Store current volume fractions as previous for next time step
+        self.alpha_ice_prev = self.model.alpha_ice.copy()
+        self.alpha_water_prev = self.model.alpha_water.copy()
+        self.alpha_air_prev = self.model.alpha_air.copy()
         
         return True
     
@@ -564,7 +624,7 @@ class DefrostSolver:
         This is the FIRST update step that accounts for phase change (ice melting to water)
         based on the net heat flux. A second update will follow for thickness reduction.
         
-        Uses the heat flux-based equations:
+        Uses the heat flux-based equations with PREVIOUS time step values:
         
         α_ice,A^(t,1) = α_ice,A^t - (Δt * (q_in'' - q_out'')) / (h_sl * ρ_ice) * δ_A
         
@@ -573,6 +633,7 @@ class DefrostSolver:
         α_air,A^(t,1) = 1 - α_H2O,A^(t,1) - α_ice,A^(t,1)
         
         where:
+        - α_ice,A^t, α_H2O,A^t = volume fractions at previous time step
         - h_sl = L_fusion (latent heat of fusion) [J/kg]
         - δ_A = dx[i] (layer thickness) [m]
         - q_in'' - q_out'' = net heat flux [W/m²]
@@ -593,20 +654,28 @@ class DefrostSolver:
             # Get layer thickness
             delta_A = self.model.dx[i]  # [m]
             
-            # Store current volume fractions
-            alpha_ice_t = self.model.alpha_ice[i]
-            alpha_H2O_t = self.model.alpha_water[i]
+            # Use PREVIOUS time step volume fractions (α^t)
+            # These are stored from the previous time step
+            if self.alpha_ice_prev is not None:
+                alpha_ice_t = self.alpha_ice_prev[i]
+                alpha_H2O_t = self.alpha_water_prev[i]
+            else:
+                # Fallback to current values if previous not available (first step)
+                alpha_ice_t = self.model.alpha_ice[i]
+                alpha_H2O_t = self.model.alpha_water[i]
             
-            # Update ice volume fraction
+            # Update ice volume fraction using previous time step value
             # α_ice,A^(t,1) = α_ice,A^t - (Δt * (q_in'' - q_out'')) / (h_sl * ρ_ice) * δ_A
+            # Rate of change: d(alpha_ice)/dt = -(q_net) / (h_sl * ρ_ice) * δ_A
             delta_alpha_ice = (self.dt * q_net) / (h_sl * self.model.rho_ice) * delta_A
             alpha_ice_new = alpha_ice_t - delta_alpha_ice
             
             # Ensure ice volume fraction doesn't go negative
             alpha_ice_new = np.maximum(alpha_ice_new, 0.0)
             
-            # Update water volume fraction
+            # Update water volume fraction using previous time step value
             # α_H2O,A^(t,1) = α_H2O,A^t + (Δt * (q_in'' - q_out'')) / (h_sl * ρ_H2O) * δ_A
+            # Rate of change: d(alpha_H2O)/dt = (q_net) / (h_sl * ρ_H2O) * δ_A
             delta_alpha_H2O = (self.dt * q_net) / (h_sl * self.model.rho_water) * delta_A
             alpha_H2O_new = alpha_H2O_t + delta_alpha_H2O
             
@@ -632,6 +701,177 @@ class DefrostSolver:
             self.model.alpha_ice[i] = alpha_ice_new
             self.model.alpha_water[i] = alpha_H2O_new
             self.model.alpha_air[i] = alpha_air_new
+    
+    def _calculate_layer_shrinkage(self):
+        """
+        Calculate layer thickness shrinkage due to surface tension and viscosity.
+        
+        Based on the equation:
+        1/δ_A * d(δ_A)/dt = -σ / (η_eff * r_pore)
+        
+        Which gives:
+        d(δ_A)/dt = -σ * δ_A / (η_eff * r_pore)
+        
+        Therefore:
+        δ_A^(t+Δt) = δ_A^t - (σ * δ_A^t * Δt) / (η_eff * r_pore)
+        
+        The effective viscosity is calculated using the Crocus model:
+        - η_eff = η_dry * f_wet(α_H2O)
+        - η_dry = η_0 * exp(b * (ρ_frost / ρ_ice))
+        - f_wet = 1 / (1 + C_wet * α_H2O^(t,1))
+        
+        The pore radius is calculated using Kozeny-Carman relationship:
+        - r_pore = (2(1 - α_ice^(t,1))) / (3 * α_ice^(t,1)) * d_ice
+        
+        The ice grain diameter evolves as:
+        - d_ice = d_ice,i * (α_ice^(t,1) / α_ice,i^(t,1))^(1/3)
+        """
+        n = self.model.n_layers
+        
+        for i in range(n):
+            # Get current values (after first volume fraction update)
+            alpha_ice = self.model.alpha_ice[i]
+            alpha_H2O = self.model.alpha_water[i]
+            delta_A_t = self.model.dx[i]  # Current layer thickness
+            
+            # Calculate frost density
+            rho_frost = (alpha_ice * self.model.rho_ice + 
+                        alpha_H2O * self.model.rho_water + 
+                        self.model.alpha_air[i] * self.model.rho_air)
+            
+            # Calculate dry viscosity: η_dry = η_0 * exp(b * (ρ_frost / ρ_ice))
+            eta_dry = self.eta_0 * np.exp(self.b * (rho_frost / self.model.rho_ice))
+            
+            # Calculate wetness reduction factor: f_wet = 1 / (1 + C_wet * α_H2O^(t,1))
+            f_wet = 1.0 / (1.0 + self.C_wet * alpha_H2O)
+            
+            # Calculate effective viscosity: η_eff = η_dry * f_wet
+            eta_eff = eta_dry * f_wet
+            
+            # Calculate ice grain diameter: d_ice = d_ice,i * (α_ice^(t,1) / α_ice,i^(t,1))^(1/3)
+            alpha_ice_i = self.model.alpha_ice_initial[i]
+            if alpha_ice_i > 0 and alpha_ice > 0:
+                d_ice = self.d_ice_i[i] * (alpha_ice / alpha_ice_i) ** (1.0 / 3.0)
+            else:
+                d_ice = self.d_ice_i[i]  # Keep initial if no ice
+            
+            # Calculate pore radius: r_pore = (2(1 - α_ice^(t,1))) / (3 * α_ice^(t,1)) * d_ice
+            if alpha_ice > 0:
+                r_pore = (2.0 * (1.0 - alpha_ice)) / (3.0 * alpha_ice) * d_ice
+            else:
+                r_pore = 1e-6  # Small value if no ice (avoid division by zero)
+            
+            # Calculate shrinkage rate: d(δ_A)/dt = -σ * δ_A / (η_eff * r_pore)
+            if eta_eff > 0 and r_pore > 0:
+                shrinkage_rate = -self.sigma * delta_A_t / (eta_eff * r_pore)
+            else:
+                shrinkage_rate = 0.0  # No shrinkage if invalid values
+            
+            # Update layer thickness: δ_A^(t+Δt) = δ_A^t + d(δ_A)/dt * Δt
+            delta_A_new = delta_A_t + shrinkage_rate * self.dt
+            
+            # Ensure thickness doesn't go negative
+            delta_A_new = np.maximum(delta_A_new, 1e-9)  # Minimum thickness
+            
+            # Update layer thickness
+            self.model.dx[i] = delta_A_new
+    
+    def _update_volume_fractions_second(self, q_fluxes):
+        """
+        Second volume fraction update based on mass per unit area and updated thickness.
+        
+        After shrinkage, the layer thickness has changed, so we need to recalculate
+        volume fractions based on mass conservation.
+        
+        Steps:
+        1. Update mass per unit area of ice: m''^(t+Δt)_ice = m''^t_ice + (dm''_{ice} / dt) Δt
+           where: dm''_{ice} / dt = (q''_{in} - q''_{out}) / h_{sl}
+        
+        2. Update mass per unit area of water: m''^(t+Δt)_water = m''^t_water - (dm''_{ice} / dt) Δt
+        
+        3. Recalculate volume fractions using new thickness:
+           α^(t+Δt)_ice = m''^(t+Δt)_ice / (ρ_ice * δ_A^(t+Δt))
+           α^(t+Δt)_H2O = m''^(t+Δt)_H2O / (ρ_H2O * δ_A^(t+Δt))
+           α^(t+Δt)_air = 1 - α^(t+Δt)_ice - α^(t+Δt)_H2O
+        
+        Parameters
+        ----------
+        q_fluxes : dict
+            Dictionary with 'in' and 'out' arrays of heat fluxes [W/m²] for each layer
+        """
+        n = self.model.n_layers
+        h_sl = self.model.L_fusion  # Latent heat of fusion [J/kg]
+        
+        for i in range(n):
+            # Get current (time t) mass per unit area
+            m_double_prime_ice_t = self.m_double_prime_ice[i]
+            m_double_prime_water_t = self.m_double_prime_water[i]
+            
+            # Calculate net heat flux
+            q_net = q_fluxes['in'][i] - q_fluxes['out'][i]  # [W/m²]
+            
+            # Calculate rate of change of ice mass per unit area
+            # dm''_{ice} / dt = (q''_{in} - q''_{out}) / h_{sl}
+            dm_ice_dt = q_net / h_sl  # [kg/(m²·s)]
+            
+            # Update mass per unit area of ice
+            # m''^(t+Δt)_ice = m''^t_ice + (dm''_{ice} / dt) Δt
+            m_double_prime_ice_new = m_double_prime_ice_t + dm_ice_dt * self.dt
+            
+            # Ensure ice mass doesn't go negative
+            m_double_prime_ice_new = np.maximum(m_double_prime_ice_new, 0.0)
+            
+            # Update mass per unit area of water
+            # m''^(t+Δt)_water = m''^t_water - (dm''_{ice} / dt) Δt
+            # Note: When ice melts (dm_ice_dt < 0), water increases
+            m_double_prime_water_new = m_double_prime_water_t - dm_ice_dt * self.dt
+            
+            # Ensure water mass doesn't go negative
+            m_double_prime_water_new = np.maximum(m_double_prime_water_new, 0.0)
+            
+            # Get updated layer thickness (after shrinkage)
+            delta_A_new = self.model.dx[i]  # [m]
+            
+            # Recalculate volume fractions using new thickness
+            # α^(t+Δt)_ice = m''^(t+Δt)_ice / (ρ_ice * δ_A^(t+Δt))
+            if delta_A_new > 0:
+                alpha_ice_new = m_double_prime_ice_new / (self.model.rho_ice * delta_A_new)
+            else:
+                alpha_ice_new = 0.0
+            
+            # α^(t+Δt)_H2O = m''^(t+Δt)_H2O / (ρ_H2O * δ_A^(t+Δt))
+            if delta_A_new > 0:
+                alpha_H2O_new = m_double_prime_water_new / (self.model.rho_water * delta_A_new)
+            else:
+                alpha_H2O_new = 0.0
+            
+            # Ensure volume fractions are in valid range [0, 1]
+            alpha_ice_new = np.clip(alpha_ice_new, 0.0, 1.0)
+            alpha_H2O_new = np.clip(alpha_H2O_new, 0.0, 1.0)
+            
+            # Calculate air volume fraction (closure)
+            # α^(t+Δt)_air = 1 - α^(t+Δt)_ice - α^(t+Δt)_H2O
+            alpha_air_new = 1.0 - alpha_ice_new - alpha_H2O_new
+            
+            # Ensure air volume fraction is valid
+            alpha_air_new = np.maximum(alpha_air_new, 0.0)
+            
+            # Normalize to ensure volume fractions sum to 1
+            total = alpha_ice_new + alpha_H2O_new + alpha_air_new
+            if total > 0:
+                scale = 1.0 / total
+                alpha_ice_new *= scale
+                alpha_H2O_new *= scale
+                alpha_air_new *= scale
+            
+            # Update model volume fractions
+            self.model.alpha_ice[i] = alpha_ice_new
+            self.model.alpha_water[i] = alpha_H2O_new
+            self.model.alpha_air[i] = alpha_air_new
+            
+            # Store updated mass per unit area for next time step
+            self.m_double_prime_ice[i] = m_double_prime_ice_new
+            self.m_double_prime_water[i] = m_double_prime_water_new
     
     def _update_volume_fractions_from_enthalpy_first(self):
         """

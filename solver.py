@@ -75,9 +75,9 @@ class DefrostSolver:
         self.m_double_prime_water = None  # Mass per unit area of water [kg/m²]
         
         # Shrinkage model parameters
-        self.sigma = 0.072  # Surface tension [N/m] (water-air at 0°C)
-        self.eta_0 = 1.0e7  # Base viscosity [Pa·s]
-        self.b = 3.0  # Structural constant (typically 2-4)
+        self.sigma = 72e-3  # Surface tension [N/m] (water-air at 0°C)
+        self.eta_0 = 3e5  # Base viscosity [Pa·s]
+        self.b = 2  # Structural constant (typically 2-4)
         self.C_wet = 15.0  # Lubricant constant
         self.d_ice_initial = 1e-4  # Initial ice grain diameter [m] (10 microns, typical)
         

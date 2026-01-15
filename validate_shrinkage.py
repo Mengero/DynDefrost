@@ -13,6 +13,9 @@ This script validates the shrinkage model by:
 
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
+from datetime import datetime
+from pathlib import Path
 from model_init import DefrostModel
 from solver import DefrostSolver
 
@@ -27,12 +30,52 @@ def validate_shrinkage_model(use_shrinkage=True):
         Whether to apply shrinkage model. If False, thickness remains constant.
         Default: True
     """
-    print("=" * 70)
+    # Set up directories for logs and figures
+    log_dir = Path("log")
+    log_dir.mkdir(exist_ok=True)  # Create log directory if it doesn't exist
+    
+    figure_dir = Path("figure")
+    figure_dir.mkdir(exist_ok=True)  # Create figure directory if it doesn't exist
+    
+    # Only save log file for shrinkage case (without_shrinkage produces empty file)
+    # Simplified filename without _with_shrinkage_ or _without_shrinkage_
+    log_filepath = None
     if use_shrinkage:
-        print("Shrinkage Model Validation (WITH shrinkage)")
+        log_filename = f"shrinkage_validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        log_filepath = log_dir / log_filename
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(message)s',
+            handlers=[
+                logging.FileHandler(log_filepath, mode='w'),
+                logging.StreamHandler()  # Also print to console
+            ]
+        )
     else:
-        print("Shrinkage Model Validation (WITHOUT shrinkage)")
-    print("=" * 70)
+        # For without_shrinkage, only print to console
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(message)s',
+            handlers=[
+                logging.StreamHandler()  # Only print to console
+            ]
+        )
+    
+    logger = logging.getLogger()
+    
+    # Helper function to log and print
+    def log_print(message):
+        logger.info(message)
+    
+    log_print("=" * 70)
+    if use_shrinkage:
+        log_print("Shrinkage Model Validation (WITH shrinkage)")
+    else:
+        log_print("Shrinkage Model Validation (WITHOUT shrinkage)")
+    log_print("=" * 70)
+    if log_filepath:
+        log_print(f"Log file: {log_filepath}")
     
     # Initial conditions
     alpha_ice_initial = 0.2
@@ -58,20 +101,21 @@ def validate_shrinkage_model(use_shrinkage=True):
     # Calculate initial mass of ice per unit area (kg/m²)
     # m''_ice = α_ice * ρ_ice * δ_A
     m_ice_initial = alpha_ice_initial * model.rho_ice * thickness_initial
-    print(f"\nInitial Conditions:")
-    print(f"  alpha_ice: {alpha_ice_initial}")
-    print(f"  thickness: {thickness_initial*1000:.2f} mm")
-    print(f"  Initial mass of ice: {m_ice_initial:.6f} kg/m²")
+    log_print(f"\nInitial Conditions:")
+    log_print(f"  alpha_ice: {alpha_ice_initial}")
+    log_print(f"  alpha_air: {model.alpha_air[0]}")
+    log_print(f"  thickness: {thickness_initial*1000:.2f} mm")
+    log_print(f"  Initial mass of ice: {m_ice_initial:.6f} kg/m²")
     
     # Mass decrease rate: 5% of initial mass per second
-    mass_decrease_rate = 0.0001 * m_ice_initial  # kg/(m²·s)
-    print(f"  Mass decrease rate: {mass_decrease_rate:.6f} kg/(m²·s) ({mass_decrease_rate/m_ice_initial*100:.1f}% per second)")
+    mass_decrease_rate = 0.001 * m_ice_initial  # kg/(m²·s)
+    log_print(f"  Mass decrease rate: {mass_decrease_rate:.6f} kg/(m²·s) ({mass_decrease_rate/m_ice_initial*100:.1f}% per second)")
     
-    # Calculate fixed lower limit for thickness
-    # Since all ice will eventually become water and there's no drainage,
-    # the minimum thickness is determined by the initial ice mass
-    thickness_min = m_ice_initial / model.rho_water
-    print(f"  Lower thickness limit: {thickness_min*1000:.4f} mm (based on initial ice mass)")
+    # Note: Minimum thickness is time-dependent and calculated at each time step
+    # thickness_min(t) = m_ice(t) / rho_ice + m_water(t) / rho_water
+    # This represents the minimum volume required by the current ice and water masses
+    log_print(f"  Minimum thickness is calculated dynamically at each time step")
+    log_print(f"    Formula: thickness_min(t) = m_ice(t) / ρ_ice + m_water(t) / ρ_water")
     
     # Time parameters
     dt = 1  # 1 second time step
@@ -89,13 +133,16 @@ def validate_shrinkage_model(use_shrinkage=True):
     thickness_history = []
     alpha_ice_history = []
     alpha_H2O_history = []
+    alpha_air_before_history = []
     m_ice_history = []
     alpha_ice_after_shrinkage_history = []
     alpha_H2O_after_shrinkage_history = []
+    alpha_air_after_history = []
     shrink_rate_history = []
     r_pore_history = []
     eta_eff_history = []
     delta_over_eta_r_history = []
+    stage2_flag_history = []  # Track when we're in stage 2 (thickness at minimum)
     
     # Calculate initial r_pore for display
     alpha_ice_init = alpha_ice_initial
@@ -121,26 +168,29 @@ def validate_shrinkage_model(use_shrinkage=True):
         delta_over_eta_r_init = 0.0
     
     # Initial state
+    alpha_air_initial = model.alpha_air[0]
     time_history.append(0.0)
     thickness_history.append(model.dx[0])
     alpha_ice_history.append(model.alpha_ice[0])
     alpha_H2O_history.append(model.alpha_water[0])
+    alpha_air_before_history.append(alpha_air_initial)
     m_ice_history.append(solver.m_double_prime_ice[0])
     alpha_ice_after_shrinkage_history.append(model.alpha_ice[0])
     alpha_H2O_after_shrinkage_history.append(model.alpha_water[0])
+    alpha_air_after_history.append(alpha_air_initial)
     shrink_rate_history.append(0.0)  # No shrinkage at initial time
     r_pore_history.append(r_pore_init)
     eta_eff_history.append(eta_eff_init)
     delta_over_eta_r_history.append(delta_over_eta_r_init)
+    stage2_flag_history.append(False)  # Not in stage 2 initially
     
-    print(f"\nStarting simulation for {n_steps} seconds...")
-    print(f"{'Time (s)':<10} {'Mass (kg/m²)':<15} {'α_ice (before)':<18} {'α_H2O (before)':<18} {'Thickness (mm)':<18} {'α_ice (after)':<18} {'α_H2O (after)':<18} {'r_pore (μm)':<15} {'η_eff (Pa·s)':<18} {'δ/(η·r) (1/Pa)':<18} {'Shrink rate (mm/s)':<20}")
-    print("-" * 200)
-    print(f"{0.0:<10.1f} {m_ice_initial:<15.6f} {alpha_ice_initial:<18.6f} {model.alpha_water[0]:<18.6f} {thickness_initial*1000:<18.4f} {alpha_ice_initial:<18.6f} {model.alpha_water[0]:<18.6f} {r_pore_init:<15.4f} {eta_eff_init:<18.2e} {delta_over_eta_r_init:<18.2e} {'-':<20}")
+    log_print(f"\nStarting simulation for {n_steps} seconds...")
+    log_print(f"{'Time (s)':<10} {'Mass (kg/m²)':<15} {'α_ice (b)':<12} {'α_H2O (b)':<12} {'α_air (b)':<12} {'Thick (mm)':<12} {'α_ice (a)':<12} {'α_H2O (a)':<12} {'α_air (a)':<12} {'r_pore (μm)':<12} {'η_eff (Pa·s)':<15} {'δ/(η·r)':<12} {'Shrink (mm/s)':<15} {'Stage2':<8}")
+    log_print("-" * 220)
+    log_print(f"{0.0:<10.1f} {m_ice_initial:<15.6f} {alpha_ice_initial:<12.6f} {model.alpha_water[0]:<12.6f} {alpha_air_initial:<12.6f} {thickness_initial*1000:<12.4f} {alpha_ice_initial:<12.6f} {model.alpha_water[0]:<12.6f} {alpha_air_initial:<12.6f} {r_pore_init:<12.4f} {eta_eff_init:<15.2e} {delta_over_eta_r_init:<12.2e} {'-':<15} {'No':<8}")
     
     # Time stepping
-    simulation_stopped = False
-    stop_reason = None
+    in_stage2 = False  # Track when we've entered stage 2 (thickness constrained to minimum)
     
     for step in range(1, n_steps + 1):
         t = step * dt
@@ -218,6 +268,11 @@ def validate_shrinkage_model(use_shrinkage=True):
         else:
             delta_over_eta_r = 0.0
         
+        # Calculate time-dependent minimum thickness based on current masses
+        # thickness_min(t) = m_ice(t) / rho_ice + m_water(t) / rho_water
+        # This is the minimum volume required by current ice and water masses
+        thickness_min = m_ice_new / model.rho_ice + m_water_new / model.rho_water
+        
         # Step 3: Calculate shrinkage model (if enabled)
         thickness_before = current_thickness
         if use_shrinkage:
@@ -231,12 +286,18 @@ def validate_shrinkage_model(use_shrinkage=True):
             # Get updated thickness after shrinkage
             thickness_after = model.dx[0]
             
-            # Enforce lower limit: thickness cannot be less than that required by water
-            if thickness_after < thickness_min:
+            # Check if we've entered stage 2: thickness constrained to minimum
+            # In stage 2, ice continues melting, water increases, but thickness = thickness_min
+            # This happens because water density > ice density, so total volume decreases
+            if thickness_after <= thickness_min:
+                # Enter stage 2: enforce thickness = minimum required by current masses
                 thickness_after = thickness_min
                 model.dx[0] = thickness_min
-                simulation_stopped = True
-                stop_reason = f"Thickness reached lower limit ({thickness_min*1000:.4f} mm) based on water mass"
+                if not in_stage2:
+                    in_stage2 = True
+                    log_print(f"\n→ Entered Stage 2 at t = {t:.1f} s: Thickness constrained to minimum ({thickness_min*1000:.4f} mm)")
+                    log_print(f"   Ice continues melting, water mass increases, but thickness stays at minimum")
+                    log_print(f"   This occurs because ρ_water ({model.rho_water:.1f} kg/m³) > ρ_ice ({model.rho_ice:.1f} kg/m³)")
             
             # Calculate shrinkage rate (mm/s)
             shrink_rate = (thickness_before - thickness_after) / dt * 1000  # Convert to mm/s
@@ -245,12 +306,13 @@ def validate_shrinkage_model(use_shrinkage=True):
             thickness_after = current_thickness
             shrink_rate = 0.0
             
-            # Still check lower limit even without shrinkage
-            if thickness_after < thickness_min:
+            # Still check if we would enter stage 2 (for consistency)
+            if thickness_after <= thickness_min:
                 thickness_after = thickness_min
                 model.dx[0] = thickness_min
-                simulation_stopped = True
-                stop_reason = f"Thickness reached lower limit ({thickness_min*1000:.4f} mm) based on water mass"
+                if not in_stage2:
+                    in_stage2 = True
+                    log_print(f"\n→ Entered Stage 2 at t = {t:.1f} s: Thickness at minimum ({thickness_min*1000:.4f} mm)")
         
         # Step 4: Re-update volume fraction of ice and water based on new thickness
         # α_ice = m''_ice / (ρ_ice * δ_A^(t+Δt))
@@ -272,35 +334,40 @@ def validate_shrinkage_model(use_shrinkage=True):
         model.alpha_air[0] = 1.0 - alpha_ice_after - alpha_H2O_after
         model.alpha_air[0] = np.maximum(model.alpha_air[0], 0.0)
         
+        # Get alpha_air values
+        alpha_air_before = model.alpha_air[0]  # After first update, before shrinkage
+        alpha_air_after = model.alpha_air[0]  # After second update (after shrinkage)
+        
         # Store results
         time_history.append(t)
         thickness_history.append(thickness_after)
         alpha_ice_history.append(alpha_ice_before)
         alpha_H2O_history.append(alpha_H2O_before)
+        alpha_air_before_history.append(alpha_air_before)
         m_ice_history.append(m_ice_new)
         alpha_ice_after_shrinkage_history.append(alpha_ice_after)
         alpha_H2O_after_shrinkage_history.append(alpha_H2O_after)
+        alpha_air_after_history.append(alpha_air_after)
         shrink_rate_history.append(shrink_rate)
         r_pore_history.append(r_pore * 1e6)  # Convert to μm for storage
         eta_eff_history.append(eta_eff)
         delta_over_eta_r_history.append(delta_over_eta_r)
+        stage2_flag_history.append(in_stage2)
         
         # Print progress
-        print(f"{t:<10.1f} {m_ice_new:<15.6f} {alpha_ice_before:<18.6f} {alpha_H2O_before:<18.6f} {thickness_after*1000:<18.4f} {alpha_ice_after:<18.6f} {alpha_H2O_after:<18.6f} {r_pore*1e6:<15.4f} {eta_eff:<18.2e} {delta_over_eta_r:<18.2e} {shrink_rate:<20.6f}")
-        
-        # Stop simulation if lower limit reached
-        if simulation_stopped:
-            print(f"\n⚠️  Simulation stopped at t = {t:.1f} s: {stop_reason}")
-            break
+        stage2_str = "Yes" if in_stage2 else "No"
+        log_print(f"{t:<10.1f} {m_ice_new:<15.6f} {alpha_ice_before:<12.6f} {alpha_H2O_before:<12.6f} {alpha_air_before:<12.6f} {thickness_after*1000:<12.4f} {alpha_ice_after:<12.6f} {alpha_H2O_after:<12.6f} {alpha_air_after:<12.6f} {r_pore*1e6:<12.4f} {eta_eff:<15.2e} {delta_over_eta_r:<12.2e} {shrink_rate:<15.6f} {stage2_str:<8}")
     
     # Convert to numpy arrays for plotting
     time_history = np.array(time_history)
     thickness_history = np.array(thickness_history)
     alpha_ice_history = np.array(alpha_ice_history)
     alpha_H2O_history = np.array(alpha_H2O_history)
+    alpha_air_before_history = np.array(alpha_air_before_history)
     m_ice_history = np.array(m_ice_history)
     alpha_ice_after_shrinkage_history = np.array(alpha_ice_after_shrinkage_history)
     alpha_H2O_after_shrinkage_history = np.array(alpha_H2O_after_shrinkage_history)
+    alpha_air_after_history = np.array(alpha_air_after_history)
     shrink_rate_history = np.array(shrink_rate_history)
     r_pore_history = np.array(r_pore_history)
     eta_eff_history = np.array(eta_eff_history)
@@ -352,51 +419,76 @@ def validate_shrinkage_model(use_shrinkage=True):
         axes[1, 1].legend()
     
     plt.tight_layout()
-    plt.savefig('shrinkage_validation.png', dpi=150, bbox_inches='tight')
-    print(f"\nResults saved to 'shrinkage_validation.png'")
+    figure_path = figure_dir / 'shrinkage_validation.png'
+    plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+    log_print(f"\nResults saved to '{figure_path}'")
     
     # Summary statistics
-    print(f"\n" + "=" * 70)
-    print("Summary Statistics:")
-    print("=" * 70)
-    print(f"Initial thickness: {thickness_initial*1000:.4f} mm")
-    print(f"Final thickness: {thickness_history[-1]*1000:.4f} mm")
-    print(f"Thickness reduction: {(thickness_initial - thickness_history[-1])*1000:.4f} mm")
-    print(f"Thickness reduction percentage: {(1 - thickness_history[-1]/thickness_initial)*100:.2f}%")
+    log_print(f"\n" + "=" * 70)
+    log_print("Summary Statistics:")
+    log_print("=" * 70)
+    log_print(f"Initial thickness: {thickness_initial*1000:.4f} mm")
+    log_print(f"Final thickness: {thickness_history[-1]*1000:.4f} mm")
+    log_print(f"Thickness reduction: {(thickness_initial - thickness_history[-1])*1000:.4f} mm")
+    log_print(f"Thickness reduction percentage: {(1 - thickness_history[-1]/thickness_initial)*100:.2f}%")
     
-    # Display lower limit information
-    print(f"\nLower thickness limit (fixed): {thickness_min*1000:.4f} mm")
-    print(f"  Based on initial ice mass: {m_ice_initial:.6f} kg/m²")
-    print(f"  Calculation: m_ice_initial / ρ_water = {m_ice_initial:.6f} / {model.rho_water:.1f} = {thickness_min*1000:.4f} mm")
-    print(f"Final thickness / Lower limit ratio: {thickness_history[-1] / thickness_min:.4f}")
+    # Display lower limit information (calculate final minimum thickness)
+    m_ice_final = m_ice_history[-1]
+    m_water_final = solver.m_double_prime_water[0]
+    thickness_min_final = m_ice_final / model.rho_ice + m_water_final / model.rho_water
+    log_print(f"\nFinal minimum thickness limit: {thickness_min_final*1000:.4f} mm")
+    log_print(f"  Based on final masses: m_ice={m_ice_final:.6f} kg/m², m_water={m_water_final:.6f} kg/m²")
+    log_print(f"  Calculation: m_ice / ρ_ice + m_water / ρ_water = {m_ice_final:.6f}/{model.rho_ice:.1f} + {m_water_final:.6f}/{model.rho_water:.1f} = {thickness_min_final*1000:.4f} mm")
+    log_print(f"Final thickness / Final lower limit ratio: {thickness_history[-1] / thickness_min_final:.4f}")
     
-    if simulation_stopped:
-        print(f"\n⚠️  Simulation stopped early: {stop_reason}")
-    print(f"\nInitial mass: {m_ice_initial:.6f} kg/m²")
-    print(f"Final mass: {m_ice_history[-1]:.6f} kg/m²")
-    print(f"Mass reduction: {m_ice_initial - m_ice_history[-1]:.6f} kg/m²")
-    print(f"Mass reduction percentage: {(1 - m_ice_history[-1]/m_ice_initial)*100:.2f}%")
-    print(f"\nInitial α_ice: {alpha_ice_initial:.6f}")
-    print(f"Final α_ice (after shrinkage): {alpha_ice_after_shrinkage_history[-1]:.6f}")
-    print(f"Initial α_H2O: {0.0:.6f}")
-    print(f"Final α_H2O (after shrinkage): {alpha_H2O_after_shrinkage_history[-1]:.6f}")
+    # Also show initial minimum thickness for reference
+    thickness_min_initial = m_ice_initial / model.rho_ice + 0.0 / model.rho_water
+    log_print(f"\nInitial minimum thickness limit: {thickness_min_initial*1000:.4f} mm")
+    log_print(f"  Based on initial masses: m_ice={m_ice_initial:.6f} kg/m², m_water=0.0 kg/m²")
+    
+    # Check if we entered stage 2
+    if any(stage2_flag_history):
+        stage2_start_time = time_history[np.argmax(stage2_flag_history)]
+        log_print(f"\n→ Stage 2 entered at t = {stage2_start_time:.1f} s")
+        log_print(f"   In Stage 2: Thickness constrained to minimum, ice continues melting")
+        log_print(f"   Total time in Stage 2: {time_history[-1] - stage2_start_time:.1f} s")
+    else:
+        log_print(f"\n→ Simulation completed without entering Stage 2")
+    log_print(f"\nInitial mass: {m_ice_initial:.6f} kg/m²")
+    log_print(f"Final mass: {m_ice_history[-1]:.6f} kg/m²")
+    log_print(f"Mass reduction: {m_ice_initial - m_ice_history[-1]:.6f} kg/m²")
+    log_print(f"Mass reduction percentage: {(1 - m_ice_history[-1]/m_ice_initial)*100:.2f}%")
+    log_print(f"\nInitial α_ice: {alpha_ice_initial:.6f}")
+    log_print(f"Final α_ice (after shrinkage): {alpha_ice_after_shrinkage_history[-1]:.6f}")
+    log_print(f"Initial α_H2O: {0.0:.6f}")
+    log_print(f"Final α_H2O (after shrinkage): {alpha_H2O_after_shrinkage_history[-1]:.6f}")
+    log_print(f"Initial α_air: {alpha_air_initial:.6f}")
+    log_print(f"Final α_air (after shrinkage): {alpha_air_after_history[-1]:.6f}")
     
     return {
         'time': time_history,
         'thickness': thickness_history,
         'alpha_ice_before': alpha_ice_history,
         'alpha_H2O_before': alpha_H2O_history,
+        'alpha_air_before': alpha_air_before_history,
         'alpha_ice_after': alpha_ice_after_shrinkage_history,
         'alpha_H2O_after': alpha_H2O_after_shrinkage_history,
+        'alpha_air_after': alpha_air_after_history,
         'mass_ice': m_ice_history,
         'shrink_rate': shrink_rate_history,
         'r_pore': r_pore_history,
         'eta_eff': eta_eff_history,
-        'delta_over_eta_r': delta_over_eta_r_history
+        'delta_over_eta_r': delta_over_eta_r_history,
+        'stage2': np.array(stage2_flag_history),
+        'log_file': str(log_filepath) if log_filepath else None
     }
 
 
 if __name__ == "__main__":
+    # Create figure directory if it doesn't exist
+    figure_dir = Path("figure")
+    figure_dir.mkdir(exist_ok=True)
+    
     # Run simulation WITH shrinkage
     print("\n" + "=" * 70)
     results_with_shrinkage = validate_shrinkage_model(use_shrinkage=True)
@@ -466,7 +558,8 @@ if __name__ == "__main__":
     axes[1, 1].legend()
     
     plt.tight_layout()
-    plt.savefig('shrinkage_comparison.png', dpi=150, bbox_inches='tight')
-    print("Comparison plots saved to 'shrinkage_comparison.png'")
+    comparison_figure_path = figure_dir / 'shrinkage_comparison.png'
+    plt.savefig(comparison_figure_path, dpi=150, bbox_inches='tight')
+    print(f"Comparison plots saved to '{comparison_figure_path}'")
     
     plt.show()

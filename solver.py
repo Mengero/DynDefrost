@@ -12,6 +12,7 @@ import numpy as np
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
 from model_init import DefrostModel
+from surface_retention import calculate_surface_retention
 
 
 class DefrostSolver:

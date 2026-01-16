@@ -6,12 +6,14 @@ including grid setup, material properties, and initial conditions.
 """
 
 import numpy as np
+from surface_retention import calculate_surface_retention
 
 
 class DefrostModel:
     """1-D Dynamic Defrost Model."""
     
-    def __init__(self, n_layers=4, frost_thickness=0.005, porosity=0.9):
+    def __init__(self, n_layers=4, frost_thickness=0.005, porosity=0.9,
+                 theta_receding=None, theta_advancing=None):
         """
         Initialize the defrost model.
         
@@ -23,6 +25,12 @@ class DefrostModel:
             Initial frost layer thickness in meters
         porosity : float
             Initial frost porosity (0-1)
+        theta_receding : float, optional
+            Receding contact angle [degrees]. If provided, surface retention will be calculated.
+            Default: None
+        theta_advancing : float, optional
+            Advancing contact angle [degrees]. If provided, surface retention will be calculated.
+            Default: None
         """
         self.n_layers = n_layers
         self.frost_thickness = frost_thickness
@@ -66,6 +74,20 @@ class DefrostModel:
         self.T_surface = None      # Surface temperature (heated side)
         self.T_ambient = None      # Ambient temperature
         
+        # Surface retention properties
+        self.theta_receding = theta_receding
+        self.theta_advancing = theta_advancing
+        self.surface_retention = None      # Maximum surface water retention [kg/m²]
+        self.surface_retention_thickness = None  # Maximum retention water layer thickness [m]
+        self.surface_type = None           # Surface type classification
+        
+        # Calculate surface retention if contact angles are provided
+        if theta_receding is not None and theta_advancing is not None:
+            retention_result = calculate_surface_retention(theta_receding, theta_advancing)
+            self.surface_retention = retention_result['retention']
+            self.surface_retention_thickness = retention_result['thickness']
+            self.surface_type = retention_result['surface_type']
+        
         # Initialize layers
         self._initialize_layers()
         
@@ -91,6 +113,14 @@ class DefrostModel:
         print(f"Initialized {n} layers")
         print(f"  Layer thickness: {self.dx[0]*1000:.4f} mm each")
         print(f"  Initial volume fractions: alpha_ice={self.alpha_ice[0]:.3f}, alpha_water={self.alpha_water[0]:.3f}, alpha_air={self.alpha_air[0]:.3f}")
+        
+        # Print surface retention information if available
+        if self.surface_retention is not None:
+            print(f"\nSurface Retention Properties:")
+            print(f"  Contact angles: θ_R={self.theta_receding:.1f}°, θ_A={self.theta_advancing:.1f}°")
+            print(f"  Surface type: {self.surface_type}")
+            print(f"  Maximum retention: {self.surface_retention*1000:.2f} g/m²")
+            print(f"  Maximum retention thickness: {self.surface_retention_thickness*1000:.4f} mm")
         
     def calculate_specific_heat(self):
         """

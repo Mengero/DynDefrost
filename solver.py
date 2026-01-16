@@ -1355,16 +1355,7 @@ class DefrostSolver:
             # Solve one time step
             success = self.solve_time_step(T_surface)
             
-            if not success:
-                # Check if sloughing occurred
-                if self.sloughing_status_history and len(self.sloughing_status_history) > 0 and self.sloughing_status_history[-1]:
-                    # Sloughing occurred - stop simulation
-                    print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s due to sloughing")
-                    break
-                else:
-                    print(f"Warning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
-            
-            # Save history
+            # Save history (before checking for sloughing, so arrays stay in sync)
             if save_history:
                 self.time_history.append(time_array[i])
                 self.temperature_history.append(self.model.T.copy())
@@ -1374,6 +1365,15 @@ class DefrostSolver:
                     'water': self.model.alpha_water.copy(),
                     'air': self.model.alpha_air.copy()
                 })
+            
+            if not success:
+                # Check if sloughing occurred
+                if self.sloughing_status_history and len(self.sloughing_status_history) > 0 and self.sloughing_status_history[-1]:
+                    # Sloughing occurred - stop simulation
+                    print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s due to sloughing")
+                    break
+                else:
+                    print(f"Warning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
         
         # Return results
         results = {

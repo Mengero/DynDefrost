@@ -13,7 +13,7 @@ class DefrostModel:
     """1-D Dynamic Defrost Model."""
     
     def __init__(self, n_layers=4, frost_thickness=0.005, porosity=0.9,
-                 theta_receding=None, theta_advancing=None):
+                 theta_receding=None, theta_advancing=None, surface_type=None):
         """
         Initialize the defrost model.
         
@@ -27,9 +27,15 @@ class DefrostModel:
             Initial frost porosity (0-1)
         theta_receding : float, optional
             Receding contact angle [degrees]. If provided, surface retention will be calculated.
+            If None and surface_type is provided, will be set based on surface_type.
             Default: None
         theta_advancing : float, optional
             Advancing contact angle [degrees]. If provided, surface retention will be calculated.
+            If None and surface_type is provided, will be set based on surface_type.
+            Default: None
+        surface_type : str, optional
+            Surface type identifier: '60deg' or '160deg'. If provided and contact angles
+            are None, will automatically assign corresponding contact angles.
             Default: None
         """
         self.n_layers = n_layers
@@ -74,19 +80,46 @@ class DefrostModel:
         self.T_surface = None      # Surface temperature (heated side)
         self.T_ambient = None      # Ambient temperature
         
+        # Standard contact angle pairs from surface_retention.py examples
+        # 60° case (hydrophilic): theta_R = 60°, theta_A = 70°
+        self.theta_60_receding = 60.0
+        self.theta_60_advancing = 70.0
+        
+        # 160° case (superhydrophobic): theta_R = 155°, theta_A = 160°
+        self.theta_160_receding = 155.0
+        self.theta_160_advancing = 160.0
+        
+        # Assign contact angles based on surface_type if not explicitly provided
+        if theta_receding is None and theta_advancing is None and surface_type is not None:
+            # Normalize surface_type (handle variations like "60deg", "60deg_", etc.)
+            surface_type_clean = surface_type.lower().strip()
+            if '60' in surface_type_clean or surface_type_clean == '60deg':
+                theta_receding = self.theta_60_receding
+                theta_advancing = self.theta_60_advancing
+                print(f"Surface type '{surface_type}' detected: Using 60° contact angles")
+                print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
+            elif '160' in surface_type_clean or surface_type_clean == '160deg':
+                theta_receding = self.theta_160_receding
+                theta_advancing = self.theta_160_advancing
+                print(f"Surface type '{surface_type}' detected: Using 160° contact angles")
+                print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
+            else:
+                print(f"Warning: Unknown surface_type '{surface_type}'. Valid values: '60deg', '160deg'")
+                print(f"  Contact angles will not be set automatically.")
+        
         # Surface retention properties
         self.theta_receding = theta_receding
         self.theta_advancing = theta_advancing
         self.surface_retention = None      # Maximum surface water retention [kg/m²]
         self.surface_retention_thickness = None  # Maximum retention water layer thickness [m]
-        self.surface_type = None           # Surface type classification
+        self.surface_type_classification = None  # Surface type classification from retention calculation
         
         # Calculate surface retention if contact angles are provided
         if theta_receding is not None and theta_advancing is not None:
             retention_result = calculate_surface_retention(theta_receding, theta_advancing)
             self.surface_retention = retention_result['retention']
             self.surface_retention_thickness = retention_result['thickness']
-            self.surface_type = retention_result['surface_type']
+            self.surface_type_classification = retention_result['surface_type']
         
         # Initialize layers
         self._initialize_layers()
@@ -118,7 +151,7 @@ class DefrostModel:
         if self.surface_retention is not None:
             print(f"\nSurface Retention Properties:")
             print(f"  Contact angles: θ_R={self.theta_receding:.1f}°, θ_A={self.theta_advancing:.1f}°")
-            print(f"  Surface type: {self.surface_type}")
+            print(f"  Surface type: {self.surface_type_classification}")
             print(f"  Maximum retention: {self.surface_retention*1000:.2f} g/m²")
             print(f"  Maximum retention thickness: {self.surface_retention_thickness*1000:.4f} mm")
         
@@ -473,7 +506,7 @@ class DefrostModel:
         )
 
 
-def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=-20.0):
+def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=-20.0, surface_type=None):
     """
     Convenience function to initialize the defrost model.
     
@@ -487,12 +520,15 @@ def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=
         Frost porosity (0-1)
     T_initial : float
         Initial temperature in °C
+    surface_type : str, optional
+        Surface type identifier: '60deg' or '160deg'. If provided, will automatically
+        assign corresponding contact angles. Default: None
         
     Returns
     -------
     DefrostModel
         Initialized model instance
     """
-    model = DefrostModel(n_layers=n_layers, frost_thickness=frost_thickness, porosity=porosity)
+    model = DefrostModel(n_layers=n_layers, frost_thickness=frost_thickness, porosity=porosity, surface_type=surface_type)
     model.set_initial_temperature(T_initial)
     return model

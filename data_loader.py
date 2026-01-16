@@ -12,7 +12,7 @@ from datetime import datetime
 
 # Mapping from contact angle to surface type
 SURFACE_TYPE_MAP = {
-    '40deg': 'Hydrophilic',
+    '60deg': 'Hydrophilic',
     '160deg': 'Superhydrophobic',
 }
 
@@ -290,7 +290,7 @@ def parse_case_filename(filename):
     Parameters
     ----------
     filename : str
-        Filename like '55min_40deg_83%_12C.txt'
+        Filename like '55min_60deg_83%_12C.txt'
         
     Returns
     -------
@@ -305,7 +305,7 @@ def parse_case_filename(filename):
     frosting_time = float(frosting_time_str)
     
     # Parse contact angle -> surface type
-    contact_angle = parts[1]  # e.g., '40deg'
+    contact_angle = parts[1]  # e.g., '60deg' or '160deg'
     surface_type = SURFACE_TYPE_MAP.get(contact_angle, contact_angle)
     
     # Parse RH (e.g., '83%' -> 0.83)
@@ -331,7 +331,7 @@ def get_frost_properties(filename):
     Parameters
     ----------
     filename : str
-        Case filename like '55min_40deg_83%_12C.txt'
+        Case filename like '55min_60deg_83%_12C.txt'
         
     Returns
     -------
@@ -361,7 +361,7 @@ def get_frost_properties(filename):
 def get_default_data_path():
     """Get the default path to the experimental data file."""
     data_dir = Path(__file__).parent / "exp_data"
-    return data_dir / "55min_40deg_83%_12C.txt"
+    return data_dir / "55min_60deg_83%_12C.txt"
 
 
 def load_defrost_data(filepath: str = None):

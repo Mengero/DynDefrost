@@ -84,6 +84,26 @@ class DefrostSolver:
         
         # Store initial ice grain diameter per layer
         self.d_ice_i = np.full(model.n_layers, self.d_ice_initial)
+        
+        # Critical detachment (sloughing) parameters
+        # Calibrated k values for different contact angles
+        self.k_60 = 245.2220   # Retention coefficient for 60° contact angle
+        self.k_160 = 3340.7267  # Retention coefficient for 160° contact angle
+        
+        # Calibrated f(alpha_water) function parameters
+        # f(alpha_water) = A * log(B * alpha_water + e) + C
+        self.A_crit = -0.051472  # Multiplier for log (negative)
+        self.B_crit = 160.4478   # Multiplier for alpha_water
+        self.e_crit = 0.903741   # Offset to prevent singularity
+        self.C_crit = 0.3466     # Plateau/base value
+        
+        # Gravitational acceleration
+        self.g = 9.81  # [m/s²]
+        
+        # Critical thickness and sloughing history
+        self.h_crit_history = []
+        self.h_total_history = []
+        self.sloughing_status_history = []  # True if sloughing occurs (h_total < h_crit)
     
     def _calculate_mixture_enthalpy(self, T_K, T_ref_K, alpha_ice, alpha_water, alpha_air):
         """
@@ -337,6 +357,57 @@ class DefrostSolver:
         self.model.calculate_specific_heat()
         self.model.calculate_thermal_conductivity()
         
+        # Step 8: Calculate critical sloughing thickness and check if frost can survive
+        sloughing_info = self._check_sloughing()
+        self.h_crit_history.append(sloughing_info['h_crit'])
+        self.h_total_history.append(sloughing_info['h_total'])
+        self.sloughing_status_history.append(sloughing_info['sloughing'])
+        
+        # Check if sloughing occurs
+        if sloughing_info['sloughing']:
+            # Calculate water retention from the layer closest to the wall (first layer)
+            if self.model.n_layers > 0:
+                # Water mass per unit area in the first layer
+                water_retention = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
+                self.model.surface_retention = water_retention  # [kg/m²]
+                self.model.surface_retention_thickness = water_retention / self.model.rho_water  # [m]
+                
+                # Set everything to 0 except the layer closest to the wall
+                # Set all layers except first to zero thickness
+                for i in range(1, self.model.n_layers):
+                    self.model.dx[i] = 0.0
+                    self.model.alpha_ice[i] = 0.0
+                    self.model.alpha_water[i] = 0.0
+                    self.model.alpha_air[i] = 0.0
+                    self.model.T[i] = 0.0
+                    self.model.H[i] = 0.0
+                    self.m_double_prime_ice[i] = 0.0
+                    self.m_double_prime_water[i] = 0.0
+                
+                # Set first layer: alpha_water = 1, everything else = 0
+                self.model.dx[0] = self.model.surface_retention_thickness
+                self.model.alpha_ice[0] = 0.0
+                self.model.alpha_water[0] = 1.0
+                self.model.alpha_air[0] = 0.0
+                # Update masses for first layer
+                self.m_double_prime_ice[0] = 0.0
+                self.m_double_prime_water[0] = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
+                
+                print(f"\n{'='*70}")
+                print("SLOUGHING DETECTED!")
+                print(f"{'='*70}")
+                print(f"  h_total = {sloughing_info['h_total']*1000:.4f} mm")
+                print(f"  h_crit = {sloughing_info['h_crit']*1000:.4f} mm")
+                print(f"  Safety factor = {sloughing_info['safety_factor']:.4f}")
+                print(f"  Surface water retention = {water_retention*1000:.2f} g/m²")
+                print(f"  Surface water retention thickness = {self.model.surface_retention_thickness*1000:.4f} mm")
+                print(f"  Layer 0: alpha_water = {self.model.alpha_water[0]:.3f}, thickness = {self.model.dx[0]*1000:.4f} mm")
+                print(f"  All other layers set to zero")
+                print(f"{'='*70}\n")
+            
+            # Return False to indicate simulation should stop
+            return False
+        
         # Update volumetric enthalpy
         for i in range(self.model.n_layers):
             self.model.H[i] = self.h[i] * self.model.rho[i]
@@ -412,6 +483,9 @@ class DefrostSolver:
             self.model.calculate_specific_heat()
             self.model.calculate_thermal_conductivity()
             
+            # Calculate critical sloughing thickness (only on last iteration to avoid duplicates)
+            # This will be done after convergence
+            
             # Check convergence
             max_change_h = np.max(np.abs(h_new - h_prev))
             max_change_T = np.max(np.abs(T_new - T_prev))
@@ -425,6 +499,57 @@ class DefrostSolver:
         # Final update of properties
         self.model.calculate_specific_heat()
         self.model.calculate_thermal_conductivity()
+        
+        # Calculate critical sloughing thickness and check if frost can survive
+        sloughing_info = self._check_sloughing()
+        self.h_crit_history.append(sloughing_info['h_crit'])
+        self.h_total_history.append(sloughing_info['h_total'])
+        self.sloughing_status_history.append(sloughing_info['sloughing'])
+        
+        # Check if sloughing occurs
+        if sloughing_info['sloughing']:
+            # Calculate water retention from the layer closest to the wall (first layer)
+            if self.model.n_layers > 0:
+                # Water mass per unit area in the first layer
+                water_retention = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
+                self.model.surface_retention = water_retention  # [kg/m²]
+                self.model.surface_retention_thickness = water_retention / self.model.rho_water  # [m]
+                
+                # Set everything to 0 except the layer closest to the wall
+                # Set all layers except first to zero thickness
+                for i in range(1, self.model.n_layers):
+                    self.model.dx[i] = 0.0
+                    self.model.alpha_ice[i] = 0.0
+                    self.model.alpha_water[i] = 0.0
+                    self.model.alpha_air[i] = 0.0
+                    self.model.T[i] = 0.0
+                    self.model.H[i] = 0.0
+                    self.m_double_prime_ice[i] = 0.0
+                    self.m_double_prime_water[i] = 0.0
+                
+                # Set first layer: alpha_water = 1, everything else = 0
+                self.model.dx[0] = self.model.surface_retention_thickness
+                self.model.alpha_ice[0] = 0.0
+                self.model.alpha_water[0] = 1.0
+                self.model.alpha_air[0] = 0.0
+                # Update masses for first layer
+                self.m_double_prime_ice[0] = 0.0
+                self.m_double_prime_water[0] = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
+                
+                print(f"\n{'='*70}")
+                print("SLOUGHING DETECTED!")
+                print(f"{'='*70}")
+                print(f"  h_total = {sloughing_info['h_total']*1000:.4f} mm")
+                print(f"  h_crit = {sloughing_info['h_crit']*1000:.4f} mm")
+                print(f"  Safety factor = {sloughing_info['safety_factor']:.4f}")
+                print(f"  Surface water retention = {water_retention*1000:.2f} g/m²")
+                print(f"  Surface water retention thickness = {self.model.surface_retention_thickness*1000:.4f} mm")
+                print(f"  Layer 0: alpha_water = {self.model.alpha_water[0]:.3f}, thickness = {self.model.dx[0]*1000:.4f} mm")
+                print(f"  All other layers set to zero")
+                print(f"{'='*70}\n")
+            
+            # Return False to indicate simulation should stop
+            return False
         
         # Update volumetric enthalpy
         for i in range(self.model.n_layers):
@@ -625,6 +750,9 @@ class DefrostSolver:
         This is the FIRST update step that accounts for phase change (ice melting to water)
         based on the net heat flux. A second update will follow for thickness reduction.
         
+        IMPORTANT: Volume fractions are only updated when enthalpy is in the mushy zone
+        (L_f[i] ≤ h ≤ L_H2O[i]). Outside the mushy zone, volume fractions remain unchanged.
+        
         Uses the heat flux-based equations with PREVIOUS time step values:
         
         α_ice,A^(t,1) = α_ice,A^t - (Δt * (q_in'' - q_out'')) / (h_sl * ρ_ice) * δ_A
@@ -649,6 +777,17 @@ class DefrostSolver:
         h_sl = self.model.L_fusion  # Latent heat of fusion [J/kg]
         
         for i in range(n):
+            # Check if enthalpy is in the mushy zone
+            h_current = self.h[i]
+            L_f_i = self.L_f[i]
+            L_H2O_i = self.L_H2O[i]
+            
+            # Only update volume fractions if in mushy zone
+            if h_current < L_f_i or h_current > L_H2O_i:
+                # Not in mushy zone - volume fractions remain unchanged
+                continue
+            
+            # In mushy zone - proceed with volume fraction update
             # Calculate net heat flux for this layer
             q_net = q_fluxes['in'][i] - q_fluxes['out'][i]  # [W/m²]
             
@@ -697,7 +836,7 @@ class DefrostSolver:
                 alpha_ice_new *= scale
                 alpha_H2O_new *= scale
                 alpha_air_new *= scale
-            
+
             # Update model volume fractions
             self.model.alpha_ice[i] = alpha_ice_new
             self.model.alpha_water[i] = alpha_H2O_new
@@ -803,21 +942,38 @@ class DefrostSolver:
         n = self.model.n_layers
         h_sl = self.model.L_fusion  # Latent heat of fusion [J/kg]
         
+        # Initialize masses if not already done
+        if self.m_double_prime_ice is None:
+            self.m_double_prime_ice = self.model.alpha_ice * self.model.rho_ice * self.model.dx
+        if self.m_double_prime_water is None:
+            self.m_double_prime_water = self.model.alpha_water * self.model.rho_water * self.model.dx
+        
         for i in range(n):
             # Get current (time t) mass per unit area
             m_double_prime_ice_t = self.m_double_prime_ice[i]
             m_double_prime_water_t = self.m_double_prime_water[i]
             
+            # Check if enthalpy is in the mushy zone
+            h_current = self.h[i]
+            L_f_i = self.L_f[i]
+            L_H2O_i = self.L_H2O[i]
+            
             # Calculate net heat flux
             q_net = q_fluxes['in'][i] - q_fluxes['out'][i]  # [W/m²]
             
-            # Calculate rate of change of ice mass per unit area
-            # dm''_{ice} / dt = (q''_{in} - q''_{out}) / h_{sl}
-            dm_ice_dt = q_net / h_sl  # [kg/(m²·s)]
+            # Only change mass if in mushy zone (L_f[i] ≤ h ≤ L_H2O[i])
+            # Otherwise, dm_ice_dt = 0 (no phase change)
+            if L_f_i <= h_current <= L_H2O_i:
+                # In mushy zone - calculate rate of change of ice mass per unit area
+                # dm''_{ice} / dt = (q''_{in} - q''_{out}) / h_{sl}
+                dm_ice_dt = q_net / h_sl  # [kg/(m²·s)]
+            else:
+                # Not in mushy zone - no phase change, dm_ice_dt = 0
+                dm_ice_dt = 0.0  # [kg/(m²·s)]
             
             # Update mass per unit area of ice
             # m''^(t+Δt)_ice = m''^t_ice + (dm''_{ice} / dt) Δt
-            m_double_prime_ice_new = m_double_prime_ice_t + dm_ice_dt * self.dt
+            m_double_prime_ice_new = m_double_prime_ice_t - dm_ice_dt * self.dt
             
             # Ensure ice mass doesn't go negative
             m_double_prime_ice_new = np.maximum(m_double_prime_ice_new, 0.0)
@@ -825,7 +981,7 @@ class DefrostSolver:
             # Update mass per unit area of water
             # m''^(t+Δt)_water = m''^t_water - (dm''_{ice} / dt) Δt
             # Note: When ice melts (dm_ice_dt < 0), water increases
-            m_double_prime_water_new = m_double_prime_water_t - dm_ice_dt * self.dt
+            m_double_prime_water_new = m_double_prime_water_t + dm_ice_dt * self.dt
             
             # Ensure water mass doesn't go negative
             m_double_prime_water_new = np.maximum(m_double_prime_water_new, 0.0)
@@ -859,11 +1015,9 @@ class DefrostSolver:
             
             # Normalize to ensure volume fractions sum to 1
             total = alpha_ice_new + alpha_H2O_new + alpha_air_new
-            if total > 0:
+            if not np.isclose(total, 1.0):
+                print(f"Warning: Volume fractions do not sum to 1 (sum={total}) in layer {i}")
                 scale = 1.0 / total
-                alpha_ice_new *= scale
-                alpha_H2O_new *= scale
-                alpha_air_new *= scale
             
             # Update model volume fractions
             self.model.alpha_ice[i] = alpha_ice_new
@@ -873,6 +1027,190 @@ class DefrostSolver:
             # Store updated mass per unit area for next time step
             self.m_double_prime_ice[i] = m_double_prime_ice_new
             self.m_double_prime_water[i] = m_double_prime_water_new
+    
+    def _calculate_base_adhesion(self, theta_deg):
+        """
+        Calculate base adhesion from wettability (contact angle).
+        
+        τ_base = 73 × 10⁻³ ⋅ (1 + cos θ) [N/m²]
+        
+        Parameters
+        ----------
+        theta_deg : float
+            Contact angle [degrees]
+        
+        Returns
+        -------
+        float
+            Base adhesion [N/m²]
+        """
+        theta_rad = np.deg2rad(theta_deg)
+        tau_0 = 73e-3  # [N/m²]
+        tau_base = tau_0 * (1 + np.cos(theta_rad))
+        return tau_base
+    
+    def _calculate_f_water(self, alpha_water):
+        """
+        Calculate f(alpha_water) using logarithmic form.
+        
+        f(alpha_water) = A * log(B * alpha_water + e) + C
+        
+        Parameters
+        ----------
+        alpha_water : float
+            Water volume fraction [-]
+        
+        Returns
+        -------
+        float
+            f(alpha_water) value [-]
+        """
+        alpha_water = np.clip(alpha_water, 0.0, 1.0)
+        
+        # Calculate argument of log
+        arg = self.B_crit * alpha_water + self.e_crit
+        
+        # Ensure argument is positive and > 0
+        if arg <= 0:
+            arg = 1e-10  # Small positive value
+        
+        # Calculate f(alpha_water) = A * log(B * alpha_water + e) + C
+        log_val = np.log(arg)
+        f_value = self.A_crit * log_val + self.C_crit
+        
+        return f_value
+    
+    def _calculate_effective_density(self):
+        """
+        Calculate effective density of the entire frost layer.
+        
+        ρ_eff = m_total / h_total
+        
+        Where m_total includes ice, water, and air masses.
+        
+        Returns
+        -------
+        float
+            Effective density [kg/m³]
+        """
+        # Initialize masses if not already done
+        if self.m_double_prime_ice is None:
+            self.m_double_prime_ice = self.model.alpha_ice * self.model.rho_ice * self.model.dx
+        if self.m_double_prime_water is None:
+            self.m_double_prime_water = self.model.alpha_water * self.model.rho_water * self.model.dx
+        
+        # Calculate total masses per unit area
+        m_ice_total = np.sum(self.m_double_prime_ice)
+        m_water_total = np.sum(self.m_double_prime_water)
+        
+        # Calculate total thickness
+        h_total = np.sum(self.model.dx)
+        
+        if h_total > 0:
+            # Calculate volumes
+            V_total = h_total  # For unit area A = 1 m²
+            V_ice = m_ice_total / self.model.rho_ice
+            V_water = m_water_total / self.model.rho_water
+            V_air = V_total - V_ice - V_water
+            V_air = np.maximum(V_air, 0.0)  # Ensure non-negative
+            
+            # Calculate air mass
+            m_air_total = V_air * self.model.rho_air
+            
+            # Total mass
+            m_total = m_ice_total + m_water_total + m_air_total
+            
+            # Effective density
+            rho_eff = m_total / h_total
+        else:
+            rho_eff = 0.0
+        
+        return rho_eff
+    
+    def _calculate_critical_thickness(self):
+        """
+        Calculate critical detachment frost thickness.
+        
+        h_crit = (k ⋅ τ_base ⋅ f(alpha_water)) / (ρ_eff ⋅ g)
+        
+        Where:
+        - τ_base = τ_0 ⋅ (1 + cos θ) (base adhesion)
+        - f(alpha_water) = A * log(B * alpha_water + e) + C
+        - ρ_eff = effective density of entire frost layer
+        - k = retention coefficient (depends on contact angle)
+        
+        The water volume fraction (alpha_water) is taken from the first layer
+        (surface layer, closest to the heated surface).
+        
+        Returns
+        -------
+        float
+            Critical detachment thickness [m]
+        """
+        # Check if contact angle is available
+        if self.model.theta_receding is None:
+            return np.inf  # Cannot calculate without contact angle
+        
+        # Get contact angle (use receding angle for adhesion)
+        theta_deg = self.model.theta_receding
+        
+        # Select k based on contact angle (interpolate if needed)
+        if theta_deg <= 60:
+            k = self.k_60
+        elif theta_deg >= 160:
+            k = self.k_160
+        else:
+            # Linear interpolation between 60° and 160°
+            k = self.k_60 + (self.k_160 - self.k_60) * (theta_deg - 60) / (160 - 60)
+        
+        # Calculate base adhesion
+        tau_base = self._calculate_base_adhesion(theta_deg)
+        
+        # Get water volume fraction from first layer (surface layer)
+        alpha_water_surface = self.model.alpha_water[0] if self.model.n_layers > 0 else 0.0
+        
+        # Calculate f(alpha_water)
+        f_water = self._calculate_f_water(alpha_water_surface)
+        
+        # Calculate effective density
+        rho_eff = self._calculate_effective_density()
+        
+        # Calculate critical thickness
+        if rho_eff > 0 and self.g > 0:
+            h_crit = (k * tau_base * f_water) / (rho_eff * self.g)
+        else:
+            h_crit = np.inf  # Invalid case
+        
+        return h_crit
+    
+    def _check_sloughing(self):
+        """
+        Check if sloughing occurs by comparing total frost thickness with critical thickness.
+        
+        Sloughing occurs when: h_total > h_crit
+        (When frost becomes too thick, gravitational force overcomes adhesion)
+        
+        Returns
+        -------
+        dict
+            Dictionary with:
+            - 'h_crit': Critical detachment thickness [m]
+            - 'h_total': Total frost thickness [m]
+            - 'sloughing': Boolean, True if sloughing occurs (h_total > h_crit)
+            - 'safety_factor': h_crit / h_total (ratio, >1 means safe, <1 means sloughing)
+        """
+        h_crit = self._calculate_critical_thickness()
+        h_total = np.sum(self.model.dx)
+        
+        sloughing = h_total > h_crit if h_crit < np.inf else False
+        safety_factor = h_crit / h_total if h_total > 0 and h_crit < np.inf else np.inf
+        
+        return {
+            'h_crit': h_crit,
+            'h_total': h_total,
+            'sloughing': sloughing,
+            'safety_factor': safety_factor
+        }
     
     def _update_volume_fractions_from_enthalpy_first(self):
         """
@@ -974,12 +1312,37 @@ class DefrostSolver:
         
         n_steps = len(time_array)
         
+        # Calculate surface retention maximum before time marching
+        if self.model.theta_receding is not None and self.model.theta_advancing is not None:
+            retention_result = calculate_surface_retention(
+                self.model.theta_receding,
+                self.model.theta_advancing
+            )
+            # Store in model for later use
+            self.model.surface_retention = retention_result['retention']
+            self.model.surface_retention_thickness = retention_result['thickness']
+            self.model.surface_type_classification = retention_result['surface_type']
+            
+            print(f"\n{'='*70}")
+            print("Surface Retention Maximum (before time marching):")
+            print(f"{'='*70}")
+            print(f"  Contact angles: θ_R={self.model.theta_receding:.1f}°, θ_A={self.model.theta_advancing:.1f}°")
+            print(f"  Surface type: {retention_result['surface_type']}")
+            print(f"  Maximum retention: {retention_result['retention']*1000:.2f} g/m²")
+            print(f"  Maximum retention thickness: {retention_result['thickness']*1000:.4f} mm")
+            print(f"  Retention coefficient (k): {retention_result['k']:.4f}")
+            print(f"  Droplet spacing (δ): {retention_result['delta']*1e6:.2f} μm")
+            print(f"{'='*70}\n")
+        
         # Initialize history
         if save_history:
             self.time_history = []
             self.temperature_history = []
             self.enthalpy_history = []
             self.volume_fraction_history = []
+            self.h_crit_history = []
+            self.h_total_history = []
+            self.sloughing_status_history = []
         
         # Time stepping
         for i in range(1, n_steps):
@@ -993,7 +1356,13 @@ class DefrostSolver:
             success = self.solve_time_step(T_surface)
             
             if not success:
-                print(f"Warning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
+                # Check if sloughing occurred
+                if self.sloughing_status_history and len(self.sloughing_status_history) > 0 and self.sloughing_status_history[-1]:
+                    # Sloughing occurred - stop simulation
+                    print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s due to sloughing")
+                    break
+                else:
+                    print(f"Warning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
             
             # Save history
             if save_history:
@@ -1010,6 +1379,9 @@ class DefrostSolver:
         results = {
             'time': np.array(self.time_history) if save_history else time_array,
             'temperature': np.array(self.temperature_history) if save_history else None,
+            'h_crit': np.array(self.h_crit_history) if save_history and len(self.h_crit_history) > 0 else None,
+            'h_total': np.array(self.h_total_history) if save_history and len(self.h_total_history) > 0 else None,
+            'sloughing': np.array(self.sloughing_status_history) if save_history and len(self.sloughing_status_history) > 0 else None,
             'model': self.model
         }
         

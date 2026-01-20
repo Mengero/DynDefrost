@@ -22,7 +22,7 @@ class DefrostSolver:
     Uses fully implicit (backward Euler) method for stability with large gradients.
     """
     
-    def __init__(self, model, dt=0.1, method='explicit'):
+    def __init__(self, model, dt=0.1, method='explicit', h_conv=10.0, T_ambient=None):
         """
         Initialize the defrost solver.
         
@@ -34,10 +34,18 @@ class DefrostSolver:
             Time step [s]. Default: 0.1
         method : str, optional
             Solver method: 'explicit' or 'implicit'. Default: 'explicit'
+        h_conv : float, optional
+            Convective heat transfer coefficient for natural convection [W/(m²·K)].
+            Default: 5.0
+        T_ambient : float, optional
+            Ambient air temperature [°C]. If None, will use model.T_ambient if set.
+            Default: None
         """
         self.model = model
         self.dt = dt
         self.method = method.lower()
+        self.h_conv = h_conv if h_conv is not None else 5.0  # Convective heat transfer coefficient [W/(m²·K)]
+        self.T_ambient = T_ambient if T_ambient is not None else model.T_ambient
         
         if self.method not in ['explicit', 'implicit']:
             raise ValueError(f"Method must be 'explicit' or 'implicit', got '{method}'")
@@ -65,6 +73,8 @@ class DefrostSolver:
         self.temperature_history = []
         self.enthalpy_history = []
         self.volume_fraction_history = []
+        self.dx_history = []  # Layer thickness history
+        self.shrinkage_rate_history = []  # Shrinkage rate history [m/s] per layer
         
         # Store previous time step volume fractions for timewise updates
         self.alpha_ice_prev = None
@@ -104,6 +114,9 @@ class DefrostSolver:
         self.h_crit_history = []
         self.h_total_history = []
         self.sloughing_status_history = []  # True if sloughing occurs (h_total < h_crit)
+        
+        # Temporary storage for shrinkage rates (updated each time step)
+        self.current_shrinkage_rates = None
     
     def _calculate_mixture_enthalpy(self, T_K, T_ref_K, alpha_ice, alpha_water, alpha_air):
         """
@@ -347,7 +360,8 @@ class DefrostSolver:
         
         # Step 5: Calculate layer shrinkage (thickness reduction)
         # This uses: 1/δ_A * d(δ_A)/dt = -σ / (η_eff * r_pore)
-        self._calculate_layer_shrinkage()
+        shrinkage_rates = self._calculate_layer_shrinkage()
+        self.current_shrinkage_rates = shrinkage_rates.copy()  # Store for history
         
         # Step 6: Second volume fraction update based on mass per unit area and new thickness
         # This recalculates volume fractions using mass conservation after thickness change
@@ -474,7 +488,8 @@ class DefrostSolver:
             self._update_volume_fractions_from_heat_flux_first(q_fluxes)
             
             # Calculate layer shrinkage (thickness reduction)
-            self._calculate_layer_shrinkage()
+            shrinkage_rates = self._calculate_layer_shrinkage()
+            self.current_shrinkage_rates = shrinkage_rates.copy()  # Store for history
             
             # Second volume fraction update based on mass per unit area and new thickness
             self._update_volume_fractions_second(q_fluxes)
@@ -652,12 +667,37 @@ class DefrostSolver:
             # Heat flux from layer i to i+1
             q_out[i] = (T[i] - T[i+1]) / R[i]
         
-        # Last layer: only heat input from previous layer
+        # Last layer: heat input from previous layer and convective heat loss to ambient air
+        # Thermal resistance: R_total = 1/h_conv + (dx_last/2)/k_last
         if n > 1:
-            i = n - 1
+            i = n - 1  # Last layer index
             q_in[i] = (T[i-1] - T[i]) / R[i-1]
-            # Assume adiabatic boundary at the end (no heat output)
-            q_out[i] = 0.0
+            # Convective heat transfer to ambient air with conductive resistance through half layer
+            if self.T_ambient is not None:
+                # Use last layer's thickness and thermal conductivity
+                dx_last = self.model.dx[i]  # Last layer thickness [m]
+                k_last = self.model.k[i]    # Last layer thermal conductivity [W/(m·K)]
+                # Thermal resistance: convective + conductive through half layer thickness
+                R_conv = 1.0 / self.h_conv  # Convective resistance [m²·K/W]
+                R_cond = (dx_last / 2.0) / k_last  # Conductive resistance [m²·K/W]
+                R_total = R_conv + R_cond
+                q_out[i] = (T[i] - self.T_ambient) / R_total  # [W/m²]
+            else:
+                # Fallback to adiabatic if ambient temperature not set
+                q_out[i] = 0.0
+        elif n == 1:
+            # Single layer case: convective heat loss to ambient air with conductive resistance
+            if self.T_ambient is not None:
+                # Use the single layer's thickness and thermal conductivity (only layer, index 0)
+                dx_layer = self.model.dx[0]  # Layer thickness [m]
+                k_layer = self.model.k[0]    # Layer thermal conductivity [W/(m·K)]
+                # Thermal resistance: convective + conductive through half layer thickness
+                R_conv = 1.0 / self.h_conv  # Convective resistance [m²·K/W]
+                R_cond = (dx_layer / 2.0) / k_layer  # Conductive resistance [m²·K/W]
+                R_total = R_conv + R_cond
+                q_out[0] = (T[0] - self.T_ambient) / R_total  # [W/m²]
+            else:
+                q_out[0] = 0.0
         
         return {'in': q_in, 'out': q_out}
     
@@ -865,8 +905,14 @@ class DefrostSolver:
         
         The ice grain diameter evolves as:
         - d_ice = d_ice,i * (α_ice^(t,1) / α_ice,i^(t,1))^(1/3)
+        
+        Returns
+        -------
+        numpy.ndarray
+            Shrinkage rate for each layer [m/s]
         """
         n = self.model.n_layers
+        shrinkage_rates = np.zeros(n)  # Store shrinkage rates for all layers
         
         for i in range(n):
             # Get current values (after first volume fraction update)
@@ -874,47 +920,58 @@ class DefrostSolver:
             alpha_H2O = self.model.alpha_water[i]
             delta_A_t = self.model.dx[i]  # Current layer thickness
             
-            # Calculate frost density
-            rho_frost = (alpha_ice * self.model.rho_ice + 
-                        alpha_H2O * self.model.rho_water + 
-                        self.model.alpha_air[i] * self.model.rho_air)
-            
-            # Calculate dry viscosity: η_dry = η_0 * exp(b * (ρ_frost / ρ_ice))
-            eta_dry = self.eta_0 * np.exp(self.b * (rho_frost / self.model.rho_ice))
-            
-            # Calculate wetness reduction factor: f_wet = 1 / (1 + C_wet * α_H2O^(t,1))
-            f_wet = 1.0 / (1.0 + self.C_wet * alpha_H2O)
-            
-            # Calculate effective viscosity: η_eff = η_dry * f_wet
-            eta_eff = eta_dry * f_wet
-            
-            # Calculate ice grain diameter: d_ice = d_ice,i * (α_ice^(t,1) / α_ice,i^(t,1))^(1/3)
-            alpha_ice_i = self.model.alpha_ice_initial[i]
-            if alpha_ice_i > 0 and alpha_ice > 0:
-                d_ice = self.d_ice_i[i] * (alpha_ice / alpha_ice_i) ** (1.0 / 3.0)
+            # If no ice, no shrinkage
+            if alpha_ice <= 0:
+                shrinkage_rate = 0.0
+                shrinkage_rates[i] = 0.0
+                delta_A_new = delta_A_t  # No change in thickness
             else:
-                d_ice = self.d_ice_i[i]  # Keep initial if no ice
-            
-            # Calculate pore radius: r_pore = (2(1 - α_ice^(t,1))) / (3 * α_ice^(t,1)) * d_ice
-            if alpha_ice > 0:
-                r_pore = (2.0 * (1.0 - alpha_ice)) / (3.0 * alpha_ice) * d_ice
-            else:
-                r_pore = 1e-6  # Small value if no ice (avoid division by zero)
-            
-            # Calculate shrinkage rate: d(δ_A)/dt = -σ * δ_A / (η_eff * r_pore)
-            if eta_eff > 0 and r_pore > 0:
-                shrinkage_rate = -self.sigma * delta_A_t / (eta_eff * r_pore)
-            else:
-                shrinkage_rate = 0.0  # No shrinkage if invalid values
-            
-            # Update layer thickness: δ_A^(t+Δt) = δ_A^t + d(δ_A)/dt * Δt
-            delta_A_new = delta_A_t + shrinkage_rate * self.dt
-            
-            # Ensure thickness doesn't go negative
-            delta_A_new = np.maximum(delta_A_new, 1e-9)  # Minimum thickness
+                # Calculate frost density
+                rho_frost = (alpha_ice * self.model.rho_ice + 
+                            alpha_H2O * self.model.rho_water + 
+                            self.model.alpha_air[i] * self.model.rho_air)
+                
+                # Calculate dry viscosity: η_dry = η_0 * exp(b * (ρ_frost / ρ_ice))
+                eta_dry = self.eta_0 * np.exp(self.b * (rho_frost / self.model.rho_ice))
+                
+                # Calculate wetness reduction factor: f_wet = 1 / (1 + C_wet * α_H2O^(t,1))
+                f_wet = 1.0 / (1.0 + self.C_wet * alpha_H2O)
+                
+                # Calculate effective viscosity: η_eff = η_dry * f_wet
+                eta_eff = eta_dry * f_wet
+                
+                # Calculate ice grain diameter: d_ice = d_ice,i * (α_ice^(t,1) / α_ice,i^(t,1))^(1/3)
+                alpha_ice_i = self.model.alpha_ice_initial[i]
+                if alpha_ice_i > 0 and alpha_ice > 0:
+                    d_ice = self.d_ice_i[i] * (alpha_ice / alpha_ice_i) ** (1.0 / 3.0)
+                else:
+                    d_ice = self.d_ice_i[i]  # Keep initial if no ice
+                
+                # Calculate pore radius: r_pore = (2(1 - α_ice^(t,1))) / (3 * α_ice^(t,1)) * d_ice
+                if alpha_ice > 0:
+                    r_pore = (2.0 * (1.0 - alpha_ice)) / (3.0 * alpha_ice) * d_ice
+                else:
+                    r_pore = 1e-6  # Small value if no ice (avoid division by zero)
+                
+                # Calculate shrinkage rate: d(δ_A)/dt = -σ * δ_A / (η_eff * r_pore)
+                if eta_eff > 0 and r_pore > 0:
+                    shrinkage_rate = -self.sigma * delta_A_t / (eta_eff * r_pore)
+                else:
+                    shrinkage_rate = 0.0  # No shrinkage if invalid values
+                
+                # Store shrinkage rate for this layer
+                shrinkage_rates[i] = shrinkage_rate
+                
+                # Update layer thickness: δ_A^(t+Δt) = δ_A^t + d(δ_A)/dt * Δt
+                delta_A_new = delta_A_t + shrinkage_rate * self.dt
+                
+                # Ensure thickness doesn't go negative
+                delta_A_new = np.maximum(delta_A_new, 1e-9)  # Minimum thickness
             
             # Update layer thickness
             self.model.dx[i] = delta_A_new
+        
+        return shrinkage_rates
     
     def _update_volume_fractions_second(self, q_fluxes):
         """
@@ -1340,6 +1397,8 @@ class DefrostSolver:
             self.temperature_history = []
             self.enthalpy_history = []
             self.volume_fraction_history = []
+            self.dx_history = []
+            self.shrinkage_rate_history = []
             self.h_crit_history = []
             self.h_total_history = []
             self.sloughing_status_history = []
@@ -1365,6 +1424,12 @@ class DefrostSolver:
                     'water': self.model.alpha_water.copy(),
                     'air': self.model.alpha_air.copy()
                 })
+                self.dx_history.append(self.model.dx.copy())  # Save layer thicknesses
+                # Save shrinkage rates (use current or zeros if not calculated yet)
+                if self.current_shrinkage_rates is not None:
+                    self.shrinkage_rate_history.append(self.current_shrinkage_rates.copy())
+                else:
+                    self.shrinkage_rate_history.append(np.zeros(self.model.n_layers))
             
             if not success:
                 # Check if sloughing occurred
@@ -1375,6 +1440,15 @@ class DefrostSolver:
                 else:
                     print(f"Warning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
         
+        # Extract volume fractions from history
+        alpha_ice_array = None
+        alpha_water_array = None
+        alpha_air_array = None
+        if save_history and len(self.volume_fraction_history) > 0:
+            alpha_ice_array = np.array([vf['ice'] for vf in self.volume_fraction_history])
+            alpha_water_array = np.array([vf['water'] for vf in self.volume_fraction_history])
+            alpha_air_array = np.array([vf['air'] for vf in self.volume_fraction_history])
+        
         # Return results
         results = {
             'time': np.array(self.time_history) if save_history else time_array,
@@ -1382,6 +1456,11 @@ class DefrostSolver:
             'h_crit': np.array(self.h_crit_history) if save_history and len(self.h_crit_history) > 0 else None,
             'h_total': np.array(self.h_total_history) if save_history and len(self.h_total_history) > 0 else None,
             'sloughing': np.array(self.sloughing_status_history) if save_history and len(self.sloughing_status_history) > 0 else None,
+            'dx': np.array(self.dx_history) if save_history and len(self.dx_history) > 0 else None,  # Layer thicknesses [m]
+            'alpha_ice': alpha_ice_array,  # Volume fraction of ice per layer [n_time_steps, n_layers]
+            'alpha_water': alpha_water_array,  # Volume fraction of water per layer [n_time_steps, n_layers]
+            'alpha_air': alpha_air_array,  # Volume fraction of air per layer [n_time_steps, n_layers]
+            'shrinkage_rate': np.array(self.shrinkage_rate_history) if save_history and len(self.shrinkage_rate_history) > 0 else None,  # Shrinkage rate [m/s] per layer [n_time_steps, n_layers]
             'model': self.model
         }
         

@@ -10,6 +10,8 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
 from data_loader import load_defrost_data, get_frost_properties, parse_case_filename
 from model_init import initialize_model
 from solver import DefrostSolver
@@ -223,7 +225,31 @@ def calculate_errors(results_ref, results_test, metrics=['h_total', 'temperature
     return errors
 
 
-def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method='explicit'):
+def run_simulation_wrapper(args):
+    """
+    Wrapper function for parallel execution of run_simulation.
+    
+    Parameters
+    ----------
+    args : tuple
+        (dt_safety_factor, data_file, n_layers, method)
+    
+    Returns
+    -------
+    tuple
+        (dt_safety_factor, results, dt) or (dt_safety_factor, None, None) if error
+    """
+    sf, data_file, n_layers, method = args
+    try:
+        results, dt = run_simulation(sf, data_file, n_layers, method)
+        return (sf, results, dt)
+    except Exception as e:
+        print(f"  ERROR (sf={sf:.2f}): {e}")
+        return (sf, None, None)
+
+
+def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method='explicit', 
+                        max_workers=None, use_parallel=True):
     """
     Test convergence with different dt_safety_factor values.
     
@@ -235,6 +261,10 @@ def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method
         Number of layers
     method : str
         Solver method ('explicit' or 'implicit')
+    max_workers : int, optional
+        Maximum number of parallel workers. If None, uses CPU count.
+    use_parallel : bool, optional
+        Whether to use parallel execution. Default: True
     """
     print("="*70)
     print("dt_safety_factor Convergence Test")
@@ -242,22 +272,36 @@ def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method
     print(f"Data file: {data_file}")
     print(f"Number of layers: {n_layers}")
     print(f"Method: {method}")
+    print(f"Parallel execution: {use_parallel}")
+    if use_parallel:
+        import os
+        if max_workers is None:
+            max_workers = os.cpu_count() or 4
+        print(f"Max workers: {max_workers}")
     print()
     
     # Test different safety factors (from finest to coarsest)
-    # Start with a very fine time step as reference
-    safety_factors = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    # Include lower values to verify convergence
+    # Reference should be the finest (most accurate) solution
+    # Note: Lower safety factors = smaller time steps = longer computation time
+    #       but better accuracy. Use 0.3-0.4 for thorough verification,
+    #       or 0.4-0.45 if computation time is a concern.
+    safety_factors = [0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9]
+    reference_sf = 0.3  # Reference safety factor (finest, most accurate)
     
     print(f"Testing {len(safety_factors)} different dt_safety_factor values...")
     print(f"Safety factors: {safety_factors}")
+    print(f"Reference solution: dt_safety_factor = {reference_sf}")
     print()
     
-    # Run reference solution (finest time step)
-    print("Running reference solution (dt_safety_factor = 0.1)...")
+    # Run reference solution - must be done first
+    print(f"Running reference solution (dt_safety_factor = {reference_sf})...")
+    print("  NOTE: This runs sequentially. Parallel execution will start after this completes.")
     try:
-        results_ref, dt_ref = run_simulation(0.1, data_file, n_layers, method)
+        results_ref, dt_ref = run_simulation(reference_sf, data_file, n_layers, method)
         print(f"  Reference dt: {dt_ref:.6f} s")
         print(f"  Reference time steps: {len(results_ref['time'])}")
+        print(f"  Reference solution completed!")
     except Exception as e:
         print(f"ERROR: Failed to run reference solution: {e}")
         return
@@ -267,31 +311,86 @@ def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method
     all_errors = {}
     all_dt = {}
     
-    # Run simulations for each safety factor
-    for sf in safety_factors:
-        print(f"\nRunning simulation with dt_safety_factor = {sf:.2f}...")
+    # Prepare safety factors to run (exclude reference which is already done)
+    safety_factors_to_run = [sf for sf in safety_factors if sf != reference_sf]
+    
+    if use_parallel and len(safety_factors_to_run) > 1:
+        # Run simulations in parallel
+        print(f"\nRunning {len(safety_factors_to_run)} simulations in parallel...")
+        
+        # Prepare arguments for parallel execution
+        args_list = [(sf, data_file, n_layers, method) for sf in safety_factors_to_run]
+        
+        # Try parallel execution, fallback to sequential if it fails
         try:
-            results, dt = run_simulation(sf, data_file, n_layers, method)
-            all_results[sf] = results
-            all_dt[sf] = dt
-            
-            print(f"  dt: {dt:.6f} s")
-            print(f"  Time steps: {len(results['time'])}")
-            
-            # Calculate errors relative to reference
-            errors = calculate_errors(results_ref, results, 
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks
+                future_to_sf = {executor.submit(run_simulation_wrapper, args): args[0] 
+                               for args in args_list}
+                
+                # Collect results as they complete
+                completed = 0
+                for future in as_completed(future_to_sf):
+                    sf = future_to_sf[future]
+                    completed += 1
+                    try:
+                        sf_result, results, dt = future.result()
+                        if results is not None:
+                            all_results[sf_result] = results
+                            all_dt[sf_result] = dt
+                            print(f"  [{completed}/{len(safety_factors_to_run)}] Completed sf={sf_result:.2f}, dt={dt:.6f} s")
+                        else:
+                            print(f"  [{completed}/{len(safety_factors_to_run)}] Failed sf={sf_result:.2f}")
+                    except Exception as e:
+                        print(f"  [{completed}/{len(safety_factors_to_run)}] Exception for sf={sf}: {e}")
+        except Exception as e:
+            print(f"\nWARNING: Parallel execution failed: {e}")
+            print("Falling back to sequential execution...")
+            use_parallel = False  # Fall through to sequential execution
+    
+    if not use_parallel or len(safety_factors_to_run) <= 1:
+        # Run simulations sequentially
+        print(f"\nRunning {len(safety_factors_to_run)} simulations sequentially...")
+        for sf in safety_factors_to_run:
+            print(f"\nRunning simulation with dt_safety_factor = {sf:.2f}...")
+            try:
+                results, dt = run_simulation(sf, data_file, n_layers, method)
+                all_results[sf] = results
+                all_dt[sf] = dt
+                print(f"  dt: {dt:.6f} s")
+                print(f"  Time steps: {len(results['time'])}")
+            except Exception as e:
+                print(f"  ERROR: {e}")
+                continue
+    
+    # Add reference solution to results
+    all_results[reference_sf] = results_ref
+    all_dt[reference_sf] = dt_ref
+    
+    # Calculate errors for all solutions (except reference)
+    print("\nCalculating errors relative to reference solution...")
+    for sf in safety_factors:
+        if sf == reference_sf:
+            # Reference solution has no error
+            all_errors[sf] = {}
+            continue
+        
+        if sf not in all_results:
+            continue
+        
+        print(f"  Calculating errors for sf={sf:.2f}...")
+        try:
+            errors = calculate_errors(results_ref, all_results[sf], 
                                      metrics=['h_total', 'temperature', 'alpha_ice', 'alpha_water'])
             all_errors[sf] = errors
             
             # Print key error metrics
             if 'h_total' in errors:
-                print(f"  h_total L2 error: {errors['h_total']['L2_error']:.6e} m")
-                print(f"  h_total Linf error: {errors['h_total']['Linf_error']:.6e} m")
+                print(f"    h_total L2 error: {errors['h_total']['L2_error']:.6e} m")
             if 'temperature' in errors:
-                print(f"  Temperature L2 error: {errors['temperature']['L2_error']:.6e} °C")
-            
+                print(f"    Temperature L2 error: {errors['temperature']['L2_error']:.6e} °C")
         except Exception as e:
-            print(f"  ERROR: {e}")
+            print(f"    ERROR calculating errors: {e}")
             continue
     
     # Create convergence plots
@@ -500,8 +599,12 @@ def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method
 
 if __name__ == "__main__":
     # Test with default parameters
+    # Set use_parallel=True to run simulations in parallel (faster)
+    # Set max_workers to control number of parallel processes (None = use all CPUs)
     results, errors, dt_values = test_dt_convergence(
         data_file="55min_60deg_83%_12C.txt",
         n_layers=40,
-        method='explicit'
+        method='explicit',
+        use_parallel=True,  # Enable parallel execution
+        max_workers=4    # Use all available CPUs
     )

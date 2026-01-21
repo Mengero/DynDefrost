@@ -12,6 +12,8 @@ This script validates the shrinkage model by:
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend to avoid X11 errors
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
@@ -131,6 +133,7 @@ def validate_shrinkage_model(use_shrinkage=True):
     # Storage for results
     time_history = []
     thickness_history = []
+    thickness_min_history = []  # Minimum thickness based on mass
     alpha_ice_history = []
     alpha_H2O_history = []
     alpha_air_before_history = []
@@ -169,8 +172,13 @@ def validate_shrinkage_model(use_shrinkage=True):
     
     # Initial state
     alpha_air_initial = model.alpha_air[0]
+    # Calculate initial minimum thickness
+    m_water_initial = solver.m_double_prime_water[0]
+    thickness_min_initial = m_ice_initial / model.rho_ice + m_water_initial / model.rho_water
+    
     time_history.append(0.0)
     thickness_history.append(model.dx[0])
+    thickness_min_history.append(thickness_min_initial)
     alpha_ice_history.append(model.alpha_ice[0])
     alpha_H2O_history.append(model.alpha_water[0])
     alpha_air_before_history.append(alpha_air_initial)
@@ -191,6 +199,7 @@ def validate_shrinkage_model(use_shrinkage=True):
     
     # Time stepping
     in_stage2 = False  # Track when we've entered stage 2 (thickness constrained to minimum)
+    ice_zero_time = None  # Track when ice volume fraction goes to 0
     
     for step in range(1, n_steps + 1):
         t = step * dt
@@ -334,6 +343,11 @@ def validate_shrinkage_model(use_shrinkage=True):
         model.alpha_air[0] = 1.0 - alpha_ice_after - alpha_H2O_after
         model.alpha_air[0] = np.maximum(model.alpha_air[0], 0.0)
         
+        # Check if ice volume fraction goes to 0 (or very close to 0)
+        if ice_zero_time is None and alpha_ice_after <= 1e-6:
+            ice_zero_time = t
+            log_print(f"\n→ Ice volume fraction reached 0 at t = {t:.2f} s")
+        
         # Get alpha_air values
         alpha_air_before = model.alpha_air[0]  # After first update, before shrinkage
         alpha_air_after = model.alpha_air[0]  # After second update (after shrinkage)
@@ -341,6 +355,7 @@ def validate_shrinkage_model(use_shrinkage=True):
         # Store results
         time_history.append(t)
         thickness_history.append(thickness_after)
+        thickness_min_history.append(thickness_min)  # Store minimum thickness
         alpha_ice_history.append(alpha_ice_before)
         alpha_H2O_history.append(alpha_H2O_before)
         alpha_air_before_history.append(alpha_air_before)
@@ -361,6 +376,7 @@ def validate_shrinkage_model(use_shrinkage=True):
     # Convert to numpy arrays for plotting
     time_history = np.array(time_history)
     thickness_history = np.array(thickness_history)
+    thickness_min_history = np.array(thickness_min_history)
     alpha_ice_history = np.array(alpha_ice_history)
     alpha_H2O_history = np.array(alpha_H2O_history)
     alpha_air_before_history = np.array(alpha_air_before_history)
@@ -375,10 +391,11 @@ def validate_shrinkage_model(use_shrinkage=True):
     
     # Plot results
     shrinkage_label = " (with shrinkage)" if use_shrinkage else " (no shrinkage)"
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))  # Changed to 2x3 to add new plot
     
     # Plot 1: Thickness vs time (exclude last time step)
     axes[0, 0].plot(time_history[:-1], thickness_history[:-1] * 1000, 'b-', linewidth=2, label=f'Layer thickness{shrinkage_label}')
+    axes[0, 0].plot(time_history[:-1], thickness_min_history[:-1] * 1000, 'r--', linewidth=2, label='Minimum thickness (m_ice/ρ_ice + m_water/ρ_water)')
     axes[0, 0].set_xlabel('Time (s)')
     axes[0, 0].set_ylabel('Thickness (mm)')
     axes[0, 0].set_title('Layer Thickness vs Time')
@@ -407,7 +424,7 @@ def validate_shrinkage_model(use_shrinkage=True):
     axes[1, 0].legend()
     axes[1, 0].set_ylim([0, 1])
     
-    # Plot 4: Thickness reduction rate (exclude last time step)
+    # Plot 4: Thickness reduction rate vs time (exclude last time step)
     if len(thickness_history) > 2:
         thickness_rate = np.diff(thickness_history[:-1]) / dt * 1000  # mm/s
         time_rate = time_history[1:-1]
@@ -417,9 +434,73 @@ def validate_shrinkage_model(use_shrinkage=True):
         axes[1, 1].set_title('Shrinkage Rate vs Time')
         axes[1, 1].grid(True, alpha=0.3)
         axes[1, 1].legend()
+    else:
+        axes[1, 1].axis('off')
+    
+    # Plot 5: Shrinkage rate vs alpha_water (exclude last time step)
+    # Only plot this for the WITH shrinkage case
+    if use_shrinkage and len(shrink_rate_history) > 1:
+        # Use alpha_H2O_after_shrinkage_history (after shrinkage) for consistency
+        alpha_water_plot = alpha_H2O_after_shrinkage_history[:-1]
+        shrink_rate_plot = shrink_rate_history[:-1]
+        
+        # Ensure arrays have the same length
+        min_len = min(len(alpha_water_plot), len(shrink_rate_plot))
+        if min_len > 0:
+            alpha_water_plot = alpha_water_plot[:min_len]
+            shrink_rate_plot = shrink_rate_plot[:min_len]
+        
+        # Only plot points where we have valid data
+        # Note: shrink_rate should be >= 0 (shrinkage) or zero (no shrinkage)
+        valid_mask = (alpha_water_plot >= 0) & (alpha_water_plot <= 1) & np.isfinite(shrink_rate_plot) & (shrink_rate_plot >= 0)
+        
+        if len(alpha_water_plot) == 0 or len(shrink_rate_plot) == 0:
+            log_print(f"\nWarning: Empty arrays for shrinkage rate plot")
+            axes[1, 2].axis('off')
+        elif np.any(valid_mask):
+            # Plot all valid points - use line plot for better visibility
+            axes[1, 2].plot(alpha_water_plot[valid_mask], shrink_rate_plot[valid_mask], 
+                           'm-', linewidth=2, alpha=0.7, label='Shrinkage rate')
+            # Also add markers for better visibility
+            axes[1, 2].plot(alpha_water_plot[valid_mask], shrink_rate_plot[valid_mask], 
+                           'mo', markersize=3, alpha=0.5)
+            axes[1, 2].set_xlabel('Water Volume Fraction (α_H2O)')
+            axes[1, 2].set_ylabel('Shrinkage Rate (mm/s)')
+            axes[1, 2].set_title('Shrinkage Rate vs Water Volume Fraction')
+            axes[1, 2].grid(True, alpha=0.3)
+            axes[1, 2].legend()
+            axes[1, 2].set_xlim([0, 1])
+            # Set y-axis to show from 0 or minimum value
+            if np.any(shrink_rate_plot[valid_mask] > 1e-6):  # Use small threshold to avoid zero-only plots
+                y_min = 0
+                y_max = np.max(shrink_rate_plot[valid_mask]) * 1.1
+                axes[1, 2].set_ylim([y_min, y_max])
+            else:
+                # All shrinkage rates are essentially zero, set a small range
+                axes[1, 2].set_ylim([0, 0.01])
+                log_print(f"\nNote: Shrinkage rates are all near zero in shrinkage rate vs alpha_water plot")
+        else:
+            # Debug: print why no valid data
+            log_print(f"\nDebug: No valid data for shrinkage rate vs alpha_water plot")
+            log_print(f"  use_shrinkage: {use_shrinkage}")
+            log_print(f"  len(shrink_rate_history): {len(shrink_rate_history)}")
+            log_print(f"  len(alpha_water_plot): {len(alpha_water_plot)}")
+            if len(alpha_water_plot) > 0:
+                log_print(f"  alpha_water_plot range: [{np.min(alpha_water_plot):.6f}, {np.max(alpha_water_plot):.6f}]")
+            if len(shrink_rate_plot) > 0:
+                log_print(f"  shrink_rate_plot range: [{np.min(shrink_rate_plot):.6f}, {np.max(shrink_rate_plot):.6f}]")
+            axes[1, 2].axis('off')
+    else:
+        # Hide the subplot if no shrinkage data
+        axes[1, 2].axis('off')
     
     plt.tight_layout()
-    figure_path = figure_dir / 'shrinkage_validation.png'
+    # Use different filenames for with/without shrinkage cases
+    if use_shrinkage:
+        figure_filename = 'shrinkage_validation_with_shrinkage.png'
+    else:
+        figure_filename = 'shrinkage_validation_without_shrinkage.png'
+    figure_path = figure_dir / figure_filename
     plt.savefig(figure_path, dpi=150, bbox_inches='tight')
     log_print(f"\nResults saved to '{figure_path}'")
     
@@ -454,6 +535,14 @@ def validate_shrinkage_model(use_shrinkage=True):
         log_print(f"   Total time in Stage 2: {time_history[-1] - stage2_start_time:.1f} s")
     else:
         log_print(f"\n→ Simulation completed without entering Stage 2")
+    
+    # Check if ice volume fraction went to 0
+    if ice_zero_time is not None:
+        log_print(f"\n→ Ice volume fraction reached 0 at t = {ice_zero_time:.2f} s")
+        log_print(f"   Final α_ice: {alpha_ice_after_shrinkage_history[-1]:.6e}")
+    else:
+        log_print(f"\n→ Ice volume fraction did not reach 0 during simulation")
+        log_print(f"   Final α_ice: {alpha_ice_after_shrinkage_history[-1]:.6f}")
     log_print(f"\nInitial mass: {m_ice_initial:.6f} kg/m²")
     log_print(f"Final mass: {m_ice_history[-1]:.6f} kg/m²")
     log_print(f"Mass reduction: {m_ice_initial - m_ice_history[-1]:.6f} kg/m²")
@@ -468,6 +557,7 @@ def validate_shrinkage_model(use_shrinkage=True):
     return {
         'time': time_history,
         'thickness': thickness_history,
+        'thickness_min': thickness_min_history,  # Minimum thickness based on mass
         'alpha_ice_before': alpha_ice_history,
         'alpha_H2O_before': alpha_H2O_history,
         'alpha_air_before': alpha_air_before_history,
@@ -512,6 +602,10 @@ if __name__ == "__main__":
                     'b-', linewidth=2, label='With shrinkage')
     axes[0, 0].plot(time_without, results_without_shrinkage['thickness'][:-1] * 1000, 
                     'r--', linewidth=2, label='Without shrinkage')
+    # Add minimum thickness line (should be the same for both cases since it's based on mass)
+    if 'thickness_min' in results_with_shrinkage:
+        axes[0, 0].plot(time_with, results_with_shrinkage['thickness_min'][:-1] * 1000, 
+                        'g:', linewidth=2, label='Minimum thickness')
     axes[0, 0].set_xlabel('Time (s)')
     axes[0, 0].set_ylabel('Thickness (mm)')
     axes[0, 0].set_title('Layer Thickness Comparison')
@@ -562,4 +656,4 @@ if __name__ == "__main__":
     plt.savefig(comparison_figure_path, dpi=150, bbox_inches='tight')
     print(f"Comparison plots saved to '{comparison_figure_path}'")
     
-    plt.show()
+    # plt.show()  # Commented out - using non-interactive backend (Agg)

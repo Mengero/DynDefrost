@@ -66,10 +66,33 @@ def calculate_f_water(alpha_water, A=-0.1, B=50, e=0.05, C=0.4):
     return f_value
 
 
-def calculate_critical_thickness(tau_base, f_water, rho_eff, k, g=9.81):
-    """Calculate critical thickness."""
+def calculate_critical_thickness(tau_base, f_water, rho_eff, k, g=9.81, offset=0.0):
+    """
+    Calculate critical thickness.
+    
+    Parameters
+    ----------
+    tau_base : float
+        Base adhesion [N/m²]
+    f_water : float
+        Water volume fraction function value [-]
+    rho_eff : float
+        Effective density [kg/m³]
+    k : float
+        Retention coefficient [-]
+    g : float
+        Gravitational acceleration [m/s²]
+    offset : float
+        Constant offset to shift curve (negative to shift down) [m]
+        Default: 0.0
+        
+    Returns
+    -------
+    float
+        Critical thickness [m]
+    """
     if rho_eff > 0 and g > 0:
-        h_crit = (k * tau_base * f_water) / (rho_eff * g)
+        h_crit = (k * tau_base * f_water) / (rho_eff * g) + offset
     else:
         h_crit = np.inf
     return h_crit
@@ -115,6 +138,47 @@ def objective_function(params, rho_eff=101.1, g=9.81):
         error_sum += relative_error
     
     return error_sum
+
+
+def calculate_k_adjustment_for_shift(shift_mm, tau_base, f_water, rho_eff=101.1, g=9.81, current_k=1.0):
+    """
+    Calculate the required k adjustment to shift critical thickness by a constant amount.
+    
+    Parameters
+    ----------
+    shift_mm : float
+        Desired shift in critical thickness [mm] (negative to shift down)
+    tau_base : float
+        Base adhesion [N/m²]
+    f_water : float
+        Water volume fraction function value [-]
+    rho_eff : float
+        Effective density [kg/m³]
+    g : float
+        Gravitational acceleration [m/s²]
+    current_k : float
+        Current k value
+        
+    Returns
+    -------
+    float
+        New k value to achieve the shift
+    """
+    shift_m = shift_mm * 1e-3  # Convert mm to m
+    
+    # Current h_crit
+    h_crit_current = (current_k * tau_base * f_water) / (rho_eff * g)
+    
+    # Desired h_crit
+    h_crit_desired = h_crit_current + shift_m
+    
+    # Calculate new k
+    if tau_base > 0 and f_water > 0 and rho_eff > 0 and g > 0:
+        new_k = (h_crit_desired * rho_eff * g) / (tau_base * f_water)
+    else:
+        new_k = current_k
+    
+    return new_k
 
 
 def calibrate_constants(rho_eff=101.1, g=9.81):
@@ -230,3 +294,35 @@ if __name__ == "__main__":
     for alpha_w in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
         f_val = calculate_f_water(alpha_w, A, B, e, C)
         print(f"    f({alpha_w:.1f}) = {f_val:.4f}")
+    
+    # Show how to shift curve downward by 1mm
+    print(f"\n{'='*70}")
+    print("To Shift Critical Thickness Curve Downward by 1mm:")
+    print(f"{'='*70}")
+    print("\nOption 1: Reduce k values proportionally")
+    print("  - This will shift the entire curve downward")
+    print("  - For a 1mm shift, reduce k_60 and k_160 by approximately:")
+    
+    # Calculate approximate k reduction for typical values
+    # Use average f_water value (between f(0) and f(0.8))
+    f_avg = (calculate_f_water(0.0, A, B, e, C) + calculate_f_water(0.8, A, B, e, C)) / 2
+    tau_base_60 = calculate_base_adhesion(60)
+    tau_base_160 = calculate_base_adhesion(160)
+    
+    # Calculate k reduction needed for 1mm shift
+    shift_mm = -1.0  # Shift down by 1mm
+    k_60_new = calculate_k_adjustment_for_shift(shift_mm, tau_base_60, f_avg, rho_eff, g, k_60)
+    k_160_new = calculate_k_adjustment_for_shift(shift_mm, tau_base_160, f_avg, rho_eff, g, k_160)
+    
+    k_60_reduction = k_60 - k_60_new
+    k_160_reduction = k_160 - k_160_new
+    k_60_reduction_pct = (k_60_reduction / k_60) * 100
+    k_160_reduction_pct = (k_160_reduction / k_160) * 100
+    
+    print(f"    k_60:  {k_60:.4f} → {k_60_new:.4f} (reduce by {k_60_reduction:.4f} or {k_60_reduction_pct:.1f}%)")
+    print(f"    k_160: {k_160:.4f} → {k_160_new:.4f} (reduce by {k_160_reduction:.4f} or {k_160_reduction_pct:.1f}%)")
+    
+    print("\nOption 2: Add offset parameter to equation")
+    print("  - Modify calculate_critical_thickness() to include: h_crit = ... + offset")
+    print("  - Set offset = -0.001 m (for 1mm downward shift)")
+    print("  - This provides a constant shift regardless of k, tau_base, or f_water")

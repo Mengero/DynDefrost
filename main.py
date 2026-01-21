@@ -5,6 +5,8 @@ Dynamic Defrost Model - Main Script
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend to avoid X11 errors
 import matplotlib.pyplot as plt
 from pathlib import Path
 from data_loader import load_defrost_data, get_frost_properties, parse_case_filename
@@ -13,20 +15,33 @@ from solver import DefrostSolver
 from temperature_interpolation import interpolate_temperature, print_interpolation_info
 from stability_criterion import calculate_max_stable_dt, get_initial_frost_properties
 
+# Create figure directory if it doesn't exist
+figure_dir = Path("figure")
+figure_dir.mkdir(exist_ok=True)
+
 
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "180min_60deg_55%_22C.txt"
+    data_file = "55min_60deg_83%_12C.txt"
     n_layers = 40
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed
     method = 'explicit'  # Solver method: 'explicit' or 'implicit'
-    dt_safety_factor = 0.9  # Use 90% of max stable dt for safety (only for explicit)
+    dt_safety_factor = 0.5
     # ===========================
     
     # Load data
     loader, time_raw, temperature_raw = load_defrost_data(data_file)
+    
+    # Apply -1.2°C offset to surface temperature readings
+    # The real temperature is 1.2°C lower than the reading
+    temperature_offset = -1  # [°C]
+    temperature_raw = temperature_raw + temperature_offset
+    print(f"\nApplied temperature offset: {temperature_offset:.1f}°C")
+    print(f"  Original temperature range: {np.min(temperature_raw - temperature_offset):.1f}°C to {np.max(temperature_raw - temperature_offset):.1f}°C")
+    print(f"  Adjusted temperature range: {np.min(temperature_raw):.1f}°C to {np.max(temperature_raw):.1f}°C")
+    
     frost_props = get_frost_properties(data_file)
     
     # Extract surface type from filename (e.g., "60deg" from "55min_60deg_83%_12C.txt")
@@ -37,6 +52,10 @@ def main():
     parts = name.split('_')
     if len(parts) > 1:
         contact_angle_str = parts[1]  # e.g., "60deg" or "160deg"
+    
+    # Create figure filename prefix based on data file
+    # e.g., "sim_result_180min_60deg_55%_22C"
+    figure_prefix = f"sim_result_{name}"
     
     # Extract ambient air temperature from case parameters
     T_ambient = case_params.get('air_temp', None)  # [°C]
@@ -110,7 +129,7 @@ def main():
     )
     
     # Create solver with convective heat transfer coefficient and ambient temperature
-    h_conv = 5.0  # Natural convection heat transfer coefficient [W/(m²·K)]
+    h_conv = 4.0  # Natural convection heat transfer coefficient [W/(m²·K)]
     solver = DefrostSolver(model, dt=dt, method=method, h_conv=h_conv, T_ambient=T_ambient)
     
     if T_ambient is not None:
@@ -177,7 +196,10 @@ def main():
         plt.grid(True, alpha=0.3)
         plt.legend(fontsize=11)
         plt.tight_layout()
-        plt.show()
+        figure_path = figure_dir / f'{figure_prefix}_total_thickness_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
     else:
         print("Warning: No thickness data available for plotting")
     
@@ -226,7 +248,10 @@ def main():
             cbar.set_label('Layer Index', fontsize=10)
         
         plt.tight_layout()
-        plt.show()
+        figure_path = figure_dir / f'{figure_prefix}_layer_thickness_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
     else:
         print("Warning: No layer thickness data available for plotting")
     
@@ -273,7 +298,10 @@ def main():
             cbar.set_label('Layer Index', fontsize=10)
         
         plt.tight_layout()
-        plt.show()
+        figure_path = figure_dir / f'{figure_prefix}_layer_temperature_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
     else:
         print("Warning: No temperature data available for plotting")
     
@@ -323,7 +351,10 @@ def main():
             cbar.set_label('Layer Index', fontsize=10)
         
         plt.tight_layout()
-        plt.show()
+        figure_path = figure_dir / f'{figure_prefix}_ice_volume_fraction_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
     else:
         print("Warning: No ice volume fraction data available for plotting")
     
@@ -373,7 +404,10 @@ def main():
             cbar.set_label('Layer Index', fontsize=10)
         
         plt.tight_layout()
-        plt.show()
+        figure_path = figure_dir / f'{figure_prefix}_water_volume_fraction_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
     else:
         print("Warning: No water volume fraction data available for plotting")
     
@@ -423,7 +457,10 @@ def main():
             cbar.set_label('Layer Index', fontsize=10)
         
         plt.tight_layout()
-        plt.show()
+        figure_path = figure_dir / f'{figure_prefix}_shrinkage_rate_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
     else:
         print("Warning: No shrinkage rate data available for plotting")
     

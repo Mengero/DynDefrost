@@ -87,10 +87,10 @@ class DefrostSolver:
         
         # Shrinkage model parameters
         self.sigma = 72e-3  # Surface tension [N/m] (water-air at 0°C)
-        self.eta_0 = 3e5  # Base viscosity [Pa·s]
-        self.b = 2  # Structural constant (typically 2-4)
-        self.C_wet = 15.0  # Lubricant constant
-        self.d_ice_initial = 1e-4  # Initial ice grain diameter [m] (10 microns, typical)
+        self.eta_0 = 2e4  # Base viscosity [Pa·s]
+        self.b = 3.0  # Structural constant (typically 2-4)
+        self.C_wet = 700  # Lubricant constant
+        self.d_ice_initial = 5e-4  # Initial ice grain diameter [m] (10 microns, typical)
         
         # Store initial ice grain diameter per layer
         self.d_ice_i = np.full(model.n_layers, self.d_ice_initial)
@@ -877,6 +877,29 @@ class DefrostSolver:
                 alpha_H2O_new *= scale
                 alpha_air_new *= scale
 
+            # Special case: if alpha_ice reaches 0, force alpha_water = 1 and alpha_ice = 0
+            if alpha_ice_new <= 1e-6:
+                alpha_ice_new = 0.0
+                alpha_H2O_new = 1.0
+                alpha_air_new = 0.0
+                # Update layer thickness to m_water / rho_water
+                # Calculate water mass per unit area: includes existing water + melted ice
+                # Use mass per unit area if available, otherwise calculate from volume fractions
+                if self.m_double_prime_water is not None:
+                    m_water = self.m_double_prime_water[i]
+                else:
+                    # Calculate total water mass: existing water + water from melted ice
+                    # Water from melted ice: mass of ice that melted = (alpha_ice_t - alpha_ice_new) * rho_ice * delta_A
+                    # Existing water: alpha_H2O_t * rho_water * delta_A
+                    ice_melted = alpha_ice_t * self.model.rho_ice * delta_A  # All ice melted
+                    water_from_ice = ice_melted  # Mass conserved: ice mass = water mass
+                    existing_water = alpha_H2O_t * self.model.rho_water * delta_A
+                    m_water = existing_water + water_from_ice
+                # Set thickness to pure water layer thickness
+                self.model.dx[i] = m_water / self.model.rho_water
+                # Force enthalpy to L_H2O (water enthalpy at melting point)
+                self.h[i] = self.L_H2O[i]
+
             # Update model volume fractions
             self.model.alpha_ice[i] = alpha_ice_new
             self.model.alpha_water[i] = alpha_H2O_new
@@ -918,10 +941,12 @@ class DefrostSolver:
             # Get current values (after first volume fraction update)
             alpha_ice = self.model.alpha_ice[i]
             alpha_H2O = self.model.alpha_water[i]
+            alpha_air = self.model.alpha_air[i]
             delta_A_t = self.model.dx[i]  # Current layer thickness
             
-            # If no ice, no shrinkage
-            if alpha_ice <= 0:
+            # If no ice or no air, no shrinkage
+            # No air means no porosity, so no shrinkage can occur
+            if alpha_ice <= 0 or alpha_air <= 0:
                 shrinkage_rate = 0.0
                 shrinkage_rates[i] = 0.0
                 delta_A_new = delta_A_t  # No change in thickness
@@ -1024,6 +1049,9 @@ class DefrostSolver:
                 # In mushy zone - calculate rate of change of ice mass per unit area
                 # dm''_{ice} / dt = (q''_{in} - q''_{out}) / h_{sl}
                 dm_ice_dt = q_net / h_sl  # [kg/(m²·s)]
+                # Ensure dm_ice_dt is non-negative (>= 0)
+                if dm_ice_dt < 0:
+                    dm_ice_dt = 0.0
             else:
                 # Not in mushy zone - no phase change, dm_ice_dt = 0
                 dm_ice_dt = 0.0  # [kg/(m²·s)]
@@ -1072,9 +1100,24 @@ class DefrostSolver:
             
             # Normalize to ensure volume fractions sum to 1
             total = alpha_ice_new + alpha_H2O_new + alpha_air_new
-            if not np.isclose(total, 1.0):
+            if not np.isclose(total, 1.0, atol=1e-3):
                 print(f"Warning: Volume fractions do not sum to 1 (sum={total}) in layer {i}")
                 scale = 1.0 / total
+                alpha_ice_new *= scale
+                alpha_H2O_new *= scale
+                alpha_air_new *= scale
+            
+            # Special case: if alpha_ice reaches 0, force alpha_water = 1 and alpha_ice = 0
+            if alpha_ice_new <= 1e-6:
+                alpha_ice_new = 0.0
+                alpha_H2O_new = 1.0
+                alpha_air_new = 0.0
+                # Also update masses to be consistent
+                m_double_prime_ice_new = 0.0
+                # Update layer thickness to m_water / rho_water
+                self.model.dx[i] = m_double_prime_water_new / self.model.rho_water
+                # Force enthalpy to L_H2O (water enthalpy at melting point)
+                self.h[i] = self.L_H2O[i]
             
             # Update model volume fractions
             self.model.alpha_ice[i] = alpha_ice_new
@@ -1234,7 +1277,7 @@ class DefrostSolver:
         
         # Calculate critical thickness
         if rho_eff > 0 and self.g > 0:
-            h_crit = (k * tau_base * f_water) / (rho_eff * self.g)
+            h_crit = (k * tau_base * f_water) / (rho_eff * self.g) - 0.0003
         else:
             h_crit = np.inf  # Invalid case
         

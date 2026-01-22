@@ -117,6 +117,14 @@ class DefrostSolver:
         
         # Temporary storage for shrinkage rates (updated each time step)
         self.current_shrinkage_rates = None
+        
+        # Flag to indicate if all layers have become water (simulation should end)
+        self._all_layers_water = False
+        
+        # Track which layer is currently the beginning (facing air) and end (close to wall)
+        # These may change after diffusion when outer layers melt
+        self.begin_idx = 0  # Initially layer 0 faces air
+        self.end_idx = model.n_layers - 1 if model.n_layers > 0 else None  # Initially last layer is close to wall
     
     def _calculate_mixture_enthalpy(self, T_K, T_ref_K, alpha_ice, alpha_water, alpha_air):
         """
@@ -325,6 +333,9 @@ class DefrostSolver:
         
         h^(t+Δt) = h^t + (Δt / m'') * q^t
         """
+        # Step 0: Check for diffusion/merging of melted layers
+        self._process_water_diffusion()
+        
         # Update boundary condition
         self.model.T_surface = T_surface
         
@@ -342,17 +353,22 @@ class DefrostSolver:
         
         # Step 2: Update enthalpy for each layer (EXPLICIT)
         # h_A^(t+Δt) = h_A^t + (Δt / m'') * (q_in'' - q_out'')^t
-        for i in range(self.model.n_layers):
+        # Only update layers from begin_idx to end_idx (active layers)       
+        for i in range(self.begin_idx, self.end_idx + 1):
             m_double_prime = self.model.rho[i] * self.model.dx[i]
             
             if m_double_prime > 0:
                 q_net = q_fluxes['in'][i] - q_fluxes['out'][i]
                 self.h[i] = h_old[i] + (self.dt / m_double_prime) * q_net
+                
+                if abs((self.dt / m_double_prime) * q_net) > abs(self.h[i]):
+                    print(f"Warning: Layer {i} enthalpy change is too large: {abs((self.dt / m_double_prime) * q_net)} J/kg")
             else:
                 self.h[i] = h_old[i]
         
         # Step 3: Update temperature based on enthalpy
         self._update_temperature_from_enthalpy(h_old)
+        
         
         # Step 4: Update volume fractions based on heat flux (using previous time step)
         # This uses the equations: α^(t,1) = α^t - (Δt * q_net) / (h_sl * ρ) * δ
@@ -373,9 +389,8 @@ class DefrostSolver:
         
         # Step 8: Calculate critical sloughing thickness and check if frost can survive
         sloughing_info = self._check_sloughing()
-        self.h_crit_history.append(sloughing_info['h_crit'])
-        self.h_total_history.append(sloughing_info['h_total'])
-        self.sloughing_status_history.append(sloughing_info['sloughing'])
+        # Store sloughing info temporarily (will be saved to history in solve() if needed)
+        self._latest_sloughing_info = sloughing_info
         
         # Check if sloughing occurs
         if sloughing_info['sloughing']:
@@ -465,6 +480,9 @@ class DefrostSolver:
             self.model.T = T_new.copy()
             self.h = h_new.copy()
             
+            # Merge fully melted layers (alpha_ice = 0) into nearby ice layers
+            self._process_water_diffusion()
+            
             # Calculate heat fluxes (IMPLICIT: using T^(t+Δt))
             # Note: Uses future temperatures T_new (T^(t+Δt))
             q_fluxes = self._calculate_heat_fluxes_general(T_surface, T_new)
@@ -517,9 +535,8 @@ class DefrostSolver:
         
         # Calculate critical sloughing thickness and check if frost can survive
         sloughing_info = self._check_sloughing()
-        self.h_crit_history.append(sloughing_info['h_crit'])
-        self.h_total_history.append(sloughing_info['h_total'])
-        self.sloughing_status_history.append(sloughing_info['sloughing'])
+        # Store sloughing info temporarily (will be saved to history in solve() if needed)
+        self._latest_sloughing_info = sloughing_info
         
         # Check if sloughing occurs
         if sloughing_info['sloughing']:
@@ -627,6 +644,9 @@ class DefrostSolver:
         - Explicit: passes T^t (current temperatures)
         - Implicit: passes T^(t+Δt) (future temperatures)
         
+        Uses tracked begin_idx and end_idx to handle cases where
+        outer layers have melted and diffused away.
+        
         Parameters
         ----------
         T_surface : float
@@ -645,61 +665,718 @@ class DefrostSolver:
         q_in = np.zeros(n)
         q_out = np.zeros(n)
         
+        # Skip layers that have been diffused away (dx = 0)
+        # Only calculate fluxes for layers with non-zero thickness
+        active_layers = np.where(self.model.dx > 1e-10)[0]
+        
+        if len(active_layers) == 0:
+            # No active layers
+            return {'in': q_in, 'out': q_out}
+        
+        # Check if active layers are adjacent (no gaps)
+        # Active layers should form a continuous range from begin_idx to end_idx
+        active_sorted = np.sort(active_layers)
+        if len(active_sorted) > 1:
+            # Check for gaps between consecutive active layers
+            for i in range(len(active_sorted) - 1):
+                if active_sorted[i + 1] - active_sorted[i] > 1:
+                    # Non-adjacent layers detected - this is not realistic
+                    raise ValueError(
+                        f"Non-adjacent active layers detected in heat flux calculation. "
+                        f"Active layers: {active_sorted}, gap between {active_sorted[i]} and {active_sorted[i+1]}. "
+                        f"This indicates layers have been incorrectly diffused away, creating unrealistic gaps."
+                    )
+        
+        # Get current begin and end layer indices
+        begin_idx = self.begin_idx
+        end_idx = self.end_idx
+        
+        if begin_idx is None or end_idx is None:
+            # Fallback to original behavior if not set
+            begin_idx = 0
+            end_idx = n - 1
+        
         # Calculate thermal resistances (using current properties)
         R = self.model.calculate_thermal_resistance()
         
-        # Layer 0: heat input from surface
-        R_surface = self.model.dx[0] / (2.0 * self.model.k[0])
-        q_surface = (T_surface - T[0]) / R_surface
-        q_in[0] = q_surface
+        # Begin layer: heat input from surface (only if it's an active layer)
+        if begin_idx in active_layers:
+            R_surface = self.model.dx[begin_idx] / (2.0 * self.model.k[begin_idx])
+            q_surface = (T_surface - T[begin_idx]) / R_surface
+            q_in[begin_idx] = q_surface
         
-        # Heat flux from layer 0 to layer 1
-        if n > 1:
-            q_01 = (T[0] - T[1]) / R[0]
-            q_out[0] = q_01
-            q_in[1] = q_01
+        # Calculate heat fluxes between active layers
+        # Active layers are guaranteed to be adjacent (checked above)
+        active_sorted = np.sort(active_layers)
         
-        # Interior layers
-        for i in range(1, n - 1):
-            # Heat flux from layer i-1 to i
-            q_in[i] = (T[i-1] - T[i]) / R[i-1]
+        # Interior heat fluxes between consecutive active layers
+        for i in range(len(active_sorted) - 1):
+            layer_i = active_sorted[i]
+            layer_next = active_sorted[i + 1]
             
-            # Heat flux from layer i to i+1
-            q_out[i] = (T[i] - T[i+1]) / R[i]
+            # Since active layers are adjacent, layer_next == layer_i + 1
+            # Use direct resistance R[layer_i]
+            if layer_i < len(R):
+                R_effective = R[layer_i]
+                if R_effective > 0:
+                    q_flux = (T[layer_i] - T[layer_next]) / R_effective
+                    q_out[layer_i] = q_flux
+                    q_in[layer_next] = q_flux
         
-        # Last layer: heat input from previous layer and convective heat loss to ambient air
-        # Thermal resistance: R_total = 1/h_conv + (dx_last/2)/k_last
-        if n > 1:
-            i = n - 1  # Last layer index
-            q_in[i] = (T[i-1] - T[i]) / R[i-1]
+        # End layer: convective heat loss to ambient air (only if it's an active layer)
+        if end_idx in active_layers:
+            # Heat input from previous layer (if exists)
+            # Since active layers are adjacent, the previous active layer is end_idx - 1
+            # and the flux has already been calculated above
+            
             # Convective heat transfer to ambient air with conductive resistance through half layer
             if self.T_ambient is not None:
-                # Use last layer's thickness and thermal conductivity
-                dx_last = self.model.dx[i]  # Last layer thickness [m]
-                k_last = self.model.k[i]    # Last layer thermal conductivity [W/(m·K)]
+                dx_end = self.model.dx[end_idx]  # End layer thickness [m]
+                k_end = self.model.k[end_idx]    # End layer thermal conductivity [W/(m·K)]
                 # Thermal resistance: convective + conductive through half layer thickness
                 R_conv = 1.0 / self.h_conv  # Convective resistance [m²·K/W]
-                R_cond = (dx_last / 2.0) / k_last  # Conductive resistance [m²·K/W]
+                R_cond = (dx_end / 2.0) / k_end  # Conductive resistance [m²·K/W]
                 R_total = R_conv + R_cond
-                q_out[i] = (T[i] - self.T_ambient) / R_total  # [W/m²]
+                q_out[end_idx] = (T[end_idx] - self.T_ambient) / R_total  # [W/m²]
             else:
                 # Fallback to adiabatic if ambient temperature not set
-                q_out[i] = 0.0
-        elif n == 1:
-            # Single layer case: convective heat loss to ambient air with conductive resistance
-            if self.T_ambient is not None:
-                # Use the single layer's thickness and thermal conductivity (only layer, index 0)
-                dx_layer = self.model.dx[0]  # Layer thickness [m]
-                k_layer = self.model.k[0]    # Layer thermal conductivity [W/(m·K)]
-                # Thermal resistance: convective + conductive through half layer thickness
-                R_conv = 1.0 / self.h_conv  # Convective resistance [m²·K/W]
-                R_cond = (dx_layer / 2.0) / k_layer  # Conductive resistance [m²·K/W]
-                R_total = R_conv + R_cond
-                q_out[0] = (T[0] - self.T_ambient) / R_total  # [W/m²]
-            else:
-                q_out[0] = 0.0
+                q_out[end_idx] = 0.0
+            
+            if abs(q_in[end_idx]) > 200 or abs(q_out[end_idx]) > 200:
+                print(f"Warning: End layer {end_idx} heat flux is too large: {abs(q_in[end_idx])} W/m² or {abs(q_out[end_idx])} W/m²")
+        
+        # Check for large fluxes in begin layer
+        if begin_idx in active_layers:
+            if abs(q_in[begin_idx]) > 200 or abs(q_out[begin_idx]) > 200:
+                print(f"Warning: Begin layer {begin_idx} heat flux is too large: {abs(q_in[begin_idx])} W/m² or {abs(q_out[begin_idx])} W/m²")
         
         return {'in': q_in, 'out': q_out}
+
+    
+    def _update_layer_below_mushy_zone(self, layer_idx, total_mass, h_new, h_old):
+        """
+        Update layer when enthalpy is below mushy zone (all water becomes ice).
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the layer
+        total_mass : float
+            Total mass after merging [kg/m²]
+        h_new : float
+            New enthalpy [J/kg]
+        h_old : float
+            Old enthalpy [J/kg]
+        """
+        dx = self.model.dx[layer_idx]
+        
+        if dx > 0:
+            alpha_ice_new = total_mass / (self.model.rho_ice * dx)
+            self.model.alpha_ice[layer_idx] = alpha_ice_new
+            self.model.alpha_water[layer_idx] = 0.0
+            
+            # Update mass per unit area
+            if self.m_double_prime_ice is not None:
+                self.m_double_prime_ice[layer_idx] = alpha_ice_new * self.model.rho_ice * dx
+            if self.m_double_prime_water is not None:
+                self.m_double_prime_water[layer_idx] = 0.0
+            
+            # Recalculate properties
+            self.model.calculate_specific_heat()
+            self.model.calculate_thermal_conductivity()
+            
+            # Update temperature
+            cp = self.model.cp[layer_idx]
+            if cp > 0:
+                T_ref = self.model.T[layer_idx]
+                dh = h_new - h_old
+                dT = dh / cp
+                self.model.T[layer_idx] = T_ref + dT
+    
+    def _update_layer_above_mushy_zone(self, layer_idx, total_water_mass, ice_mass, h_new, h_old, ice_layers):
+        """
+        Update layer when enthalpy is above mushy zone (ice becomes water, diffuses to next layer).
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the receiving layer
+        total_water_mass : float
+            Total water mass after merging [kg/m²]
+        ice_mass : float
+            Ice mass in receiving layer [kg/m²]
+        h_new : float
+            New enthalpy [J/kg]
+        h_old : float
+            Old enthalpy [J/kg]
+        ice_layers : numpy.ndarray
+            Array of ice layer indices
+        
+        Returns
+        -------
+        bool
+            True if all layers became water, False otherwise
+        """
+        # Convert all ice to water
+        total_water_after_conversion = total_water_mass + ice_mass
+        
+        # When all ice melts, the resulting water has enthalpy h_new
+        # (h_new already accounts for the latent heat of melting)
+        water_enthalpy = h_new
+        
+        # Find next nearby ice layer (excluding current one)
+        remaining_ice_layers = ice_layers[ice_layers != layer_idx]
+        
+        if len(remaining_ice_layers) > 0:
+            # Find nearest ice layer
+            distances = np.abs(remaining_ice_layers - layer_idx)
+            next_ice_idx = remaining_ice_layers[np.argmin(distances)]
+            
+            # Set current layer to all water first (alpha_air will be calculated automatically)
+            self._set_layer_to_all_water(layer_idx, total_water_after_conversion)
+            
+            # Recursively merge all water into next ice layer (will check mushy zone iteratively)
+            all_water = self._merge_water_into_ice_layer(next_ice_idx, total_water_after_conversion, water_enthalpy)
+            return all_water
+        else:
+            # No more ice layers - all layers become water
+            self._set_layer_to_all_water(layer_idx, total_water_after_conversion)
+            return True  # All layers are water
+    
+    def _update_layer_in_mushy_zone(self, layer_idx, water_mass_total, alpha_ice_keep):
+        """
+        Update layer when enthalpy is in mushy zone (keep alpha_ice same, increase alpha_water).
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the layer
+        water_mass_total : float
+            Total water mass after merging [kg/m²]
+        alpha_ice_keep : float
+            Alpha ice to keep (unchanged)
+        """
+        dx = self.model.dx[layer_idx]  # dx is constant
+        
+        if dx > 0:
+            # Calculate alpha_water from water mass
+            water_volume = water_mass_total / self.model.rho_water
+            self.model.alpha_water[layer_idx] = water_volume / dx
+            
+            # Keep alpha_ice the same
+            self.model.alpha_ice[layer_idx] = alpha_ice_keep
+            
+            # Calculate alpha_air from constraint: alpha_air = 1 - alpha_ice - alpha_water
+            self.model.alpha_air[layer_idx] = 1.0 - alpha_ice_keep - self.model.alpha_water[layer_idx]
+            
+            # Update mass per unit area
+            if self.m_double_prime_water is not None:
+                self.m_double_prime_water[layer_idx] = water_mass_total
+            
+            # Recalculate properties
+            self.model.calculate_specific_heat()
+            self.model.calculate_thermal_conductivity()
+            
+            # Temperature stays at melting point
+            self.model.T[layer_idx] = self.model.T_melt
+    
+    def _set_layer_to_all_water(self, layer_idx, water_mass):
+        """
+        Set a layer to all water (no ice).
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the layer
+        water_mass : float
+            Water mass [kg/m²]
+        """
+        dx = self.model.dx[layer_idx]  # dx is constant
+        
+        self.model.alpha_ice[layer_idx] = 0.0
+        
+        # Calculate alpha_water from water mass
+        if dx > 0:
+            water_volume = water_mass / self.model.rho_water
+            self.model.alpha_water[layer_idx] = water_volume / dx
+        else:
+            self.model.alpha_water[layer_idx] = 0.0
+        
+        # Calculate alpha_air from constraint: alpha_air = 1 - alpha_ice - alpha_water
+        self.model.alpha_air[layer_idx] = 1.0 - 0.0 - self.model.alpha_water[layer_idx]
+        if self.m_double_prime_ice is not None:
+            self.m_double_prime_ice[layer_idx] = 0.0
+        if self.m_double_prime_water is not None:
+            self.m_double_prime_water[layer_idx] = water_mass
+        
+        # Recalculate properties
+        self.model.calculate_specific_heat()
+        self.model.calculate_thermal_conductivity()
+    
+    def _reset_melted_layer(self, layer_idx):
+        """
+        Reset a melted layer to all zeros.
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the layer to reset
+        """
+        self.model.alpha_ice[layer_idx] = 0.0
+        self.model.alpha_water[layer_idx] = 0.0
+        self.model.alpha_air[layer_idx] = 0.0
+        self.model.dx[layer_idx] = 0.0
+        self.model.T[layer_idx] = 0.0
+        self.h[layer_idx] = 0.0
+        if self.m_double_prime_ice is not None:
+            self.m_double_prime_ice[layer_idx] = 0.0
+        if self.m_double_prime_water is not None:
+            self.m_double_prime_water[layer_idx] = 0.0
+    
+    def _merge_water_into_ice_layer(self, layer_idx, water_mass_to_add, water_enthalpy):
+        """
+        Merge water mass into an ice layer iteratively.
+        
+        Process:
+        1. Add water mass from diffusion layer(s) to receiver layer water mass
+        2. Update volume fraction of water in receiver layer
+        3. Keep volume fraction of ice the same
+        4. Update volume fraction of air (from constraint: alpha_air = 1 - alpha_ice - alpha_water)
+        5. Calculate receiver's new enthalpy
+        6. Check if it's in/below/above mushy zone:
+           - If below: update properties and temperature
+           - If in: update properties and temperature
+           - If above: all ice becomes water, add to diffusion water mass, bring to next receiving layer, repeat
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the ice layer to merge water into
+        water_mass_to_add : float
+            Water mass to add to the layer [kg/m²] (from diffusion layer)
+        water_enthalpy : float
+            Specific enthalpy of the water being added [J/kg]
+        
+        Returns
+        -------
+        bool
+            True if all layers became water, False otherwise
+        """
+        # Get current layer properties
+        dx = self.model.dx[layer_idx]  # dx is constant during merging
+        alpha_ice = self.model.alpha_ice[layer_idx]  # Will be kept the same initially
+        
+        # Step 1: Get current water mass in receiver layer
+        if self.m_double_prime_water is not None:
+            water_mass_receiver = self.m_double_prime_water[layer_idx]
+        else:
+            alpha_water_current = self.model.alpha_water[layer_idx]
+            water_mass_receiver = alpha_water_current * self.model.rho_water * dx
+        
+        # Step 2: Add water mass from diffusion layer(s) to receiver layer water mass
+        total_water_mass = water_mass_receiver + water_mass_to_add
+        
+        # Step 3: Update volume fraction of water in receiver layer
+        if dx > 0:
+            water_volume = total_water_mass / self.model.rho_water
+            alpha_water_new = water_volume / dx
+        else:
+            alpha_water_new = 0.0
+        
+        # Step 4: Keep volume fraction of ice the same
+        alpha_ice_keep = alpha_ice
+        
+        # Step 5: Update volume fraction of air (from constraint)
+        alpha_air_new = 1.0 - alpha_ice_keep - alpha_water_new
+        
+        # Step 6: Calculate receiver's new enthalpy
+        # Use mass-weighted average: h_new = (h_receiver * m_receiver + h_diffusion * m_diffusion) / m_total
+        ice_mass = alpha_ice_keep * self.model.rho_ice * dx
+        air_mass = alpha_air_new * self.model.rho_air * dx
+        current_total_mass = ice_mass + water_mass_receiver + air_mass
+        new_total_mass = current_total_mass + water_mass_to_add
+        
+        if new_total_mass <= 0:
+            return False
+        
+        h_current = self.h[layer_idx]
+        h_new = (h_current * current_total_mass + water_enthalpy * water_mass_to_add) / new_total_mass
+        
+        # Get mushy zone thresholds for this layer
+        L_f_i = self.L_f[layer_idx]
+        L_H2O_i = self.L_H2O[layer_idx]
+        
+        # Step 7: Check mushy zone and update accordingly
+        if h_new > L_H2O_i:
+            # Above mushy zone: all ice in receiving layer becomes water
+            # Add this to the diffusion water mass, bring to next receiving layer, repeat
+            total_water_after_conversion = total_water_mass + ice_mass
+            
+            # Calculate enthalpy of water being diffused (weighted average of all water)
+            if total_water_after_conversion > 0:
+                # Weighted average: (receiver_water * h_receiver + diffusion_water * h_diffusion + ice * h_after_melting) / total
+                # For ice that melts, use h_new as its enthalpy (since it's all water now)
+                water_enthalpy_for_next = (
+                    water_mass_receiver * h_current +
+                    water_mass_to_add * water_enthalpy +
+                    ice_mass * h_new
+                ) / total_water_after_conversion
+            else:
+                water_enthalpy_for_next = h_new
+            
+            # Set current layer to all water (alpha_air will be calculated automatically)
+            self._set_layer_to_all_water(layer_idx, total_water_after_conversion)
+            
+            # Find next nearby ice layer
+            ice_layers = np.where(self.model.alpha_ice > 1e-10)[0]
+            remaining_ice_layers = ice_layers[ice_layers != layer_idx]
+            
+            if len(remaining_ice_layers) > 0:
+                # Find nearest ice layer
+                distances = np.abs(remaining_ice_layers - layer_idx)
+                next_ice_idx = remaining_ice_layers[np.argmin(distances)]
+                
+                # Recursively merge into next layer (repeat the same process)
+                return self._merge_water_into_ice_layer(
+                    next_ice_idx, total_water_after_conversion, water_enthalpy_for_next
+                )
+            else:
+                # No more ice layers - all layers become water
+                self._all_layers_water = True
+                return True
+                
+        elif h_new < L_f_i:
+            # Below mushy zone: update properties and temperature
+            self.h[layer_idx] = h_new
+            
+            # All water becomes ice
+            if dx > 0:
+                alpha_ice_new = new_total_mass / (self.model.rho_ice * dx)
+                self.model.alpha_ice[layer_idx] = alpha_ice_new
+                self.model.alpha_water[layer_idx] = 0.0
+                # Calculate alpha_air from constraint
+                self.model.alpha_air[layer_idx] = 1.0 - alpha_ice_new - 0.0
+                
+                # Update mass per unit area
+                if self.m_double_prime_ice is not None:
+                    self.m_double_prime_ice[layer_idx] = alpha_ice_new * self.model.rho_ice * dx
+                if self.m_double_prime_water is not None:
+                    self.m_double_prime_water[layer_idx] = 0.0
+                
+                # Recalculate properties after volume fraction changes
+                self.model.calculate_specific_heat()
+                self.model.calculate_thermal_conductivity()
+                
+                # Update temperature
+                cp = self.model.cp[layer_idx]
+                if cp > 0:
+                    T_ref = self.model.T[layer_idx]
+                    dh = h_new - h_current
+                    dT = dh / cp
+                    self.model.T[layer_idx] = T_ref + dT
+            
+            return False
+            
+        else:
+            # In mushy zone: update properties and temperature
+            self.h[layer_idx] = h_new
+            
+            # Update volume fractions (already calculated above)
+            self.model.alpha_water[layer_idx] = alpha_water_new
+            self.model.alpha_ice[layer_idx] = alpha_ice_keep
+            self.model.alpha_air[layer_idx] = alpha_air_new
+            
+            # Update mass per unit area
+            if self.m_double_prime_water is not None:
+                self.m_double_prime_water[layer_idx] = total_water_mass
+            
+            # Recalculate properties after volume fraction changes
+            self.model.calculate_specific_heat()
+            self.model.calculate_thermal_conductivity()
+            
+            # Update temperature (stays at melting point in mushy zone, but update for consistency)
+            self.model.T[layer_idx] = self.model.T_melt
+            
+            return False
+    
+    def _process_water_diffusion(self):
+        """
+        Process water diffusion from melted layers into receiving ice layers.
+        
+        This function implements the diffusion equations:
+        1. Add water mass from diffusion layer(s) to receiver layer: 
+           m^1_{R,H_2O} = m^0_{R,H_2O} + m_{D,H_2O}
+        2. Update volume fraction of water in receiver layer:
+           α^1_{R,H_2O} = m^1_{R,H_2O} / (ρ_{H_2O} * δ_R)
+        3. Keep volume fraction of ice the same:
+           α^1_{R,ice} = α^0_{R,ice}
+        4. Update volume fraction of air from constraint:
+           α^1_{R,air} = 1 - α^1_{R,H_2O} - α^1_{R,ice}
+        5. Calculate receiver's new enthalpy
+        6. Check if in/below/above mushy zone and update accordingly
+        
+        When layers completely melt (alpha_ice = 0), their water is merged into the nearest
+        layer that still has ice. If multiple layers melt at the same time, they all merge
+        into the same nearest ice layer. This prevents accumulation of pure water layers.
+        
+        This function should be called at the beginning of each time step,
+        before updating boundary conditions and calculating heat fluxes.
+        """
+        n = self.model.n_layers
+        if n == 0:
+            return
+        
+        # Find all layers that are completely melted (alpha_ice = 0)
+        melted_layers = np.where(self.model.alpha_ice < 1e-10)[0]
+        
+        if len(melted_layers) == 0:
+            return  # No melted layers to merge
+        
+        # Find layers with ice (alpha_ice > 0)
+        ice_layers = np.where(self.model.alpha_ice > 1e-10)[0]
+        
+        if len(ice_layers) == 0:
+            # All layers are melted - nothing to merge into
+            # Just reset all layers to 0
+            for i in melted_layers:
+                self._reset_melted_layer(i)
+            self._all_layers_water = True
+            return
+        
+        # Group melted layers by their nearest ice layer
+        # This handles cases where melted layers are at both ends (i=0 and i=n-1)
+        # Strategy: group melted layers by which ice layer is nearest to them
+        if len(melted_layers) > 0:
+            # Create a mapping: ice_layer_idx -> list of melted layers that are nearest to it
+            ice_to_melted = {}
+            
+            for melted_idx in melted_layers:
+                # Find nearest ice layer for this melted layer
+                distances = np.abs(ice_layers - melted_idx)
+                nearest_ice_idx = ice_layers[np.argmin(distances)]
+                
+                # Group this melted layer with others that have the same nearest ice layer
+                if nearest_ice_idx not in ice_to_melted:
+                    ice_to_melted[nearest_ice_idx] = []
+                ice_to_melted[nearest_ice_idx].append(melted_idx)
+            
+            # Now start the diffusion process for each group
+            for nearest_ice_idx, melted_group in ice_to_melted.items():
+                # Step 1: Collect total water mass and total water enthalpy from diffusion layer(s)
+                total_water_mass = 0.0
+                total_water_enthalpy = 0.0
+                
+                for melted_idx in melted_group:
+                    # Calculate water mass from melted layer
+                    water_mass = self.m_double_prime_water[melted_idx]
+                    total_water_mass += water_mass
+                    
+                    # Collect enthalpy contribution (weighted by mass)
+                    if water_mass > 0:
+                        total_water_enthalpy += self.h[melted_idx] * water_mass
+                
+                # Step 2: Start diffusion process (recursive function)
+                # This function will handle all the equations and recursive calls if above L_H2O
+                self._diffuse_water_into_layer(nearest_ice_idx, total_water_mass, total_water_enthalpy, ice_layers)
+                
+                # Step 3: Reset all melted layers in this group to 0
+                for melted_idx in melted_group:
+                    self._reset_melted_layer(melted_idx)
+        
+        # After diffusion, update which layers are facing air and close to wall
+        # Outer layers (i=0, i=1, etc.) may have melted and diffused away
+        self._update_surface_and_wall_layers()
+        
+        # Check if all layers are water - if so, simulation should end
+        # This check happens after all merging is complete
+        remaining_ice_layers_after = np.where(self.model.alpha_ice > 1e-10)[0]
+        if len(remaining_ice_layers_after) == 0:
+            # All layers are water - simulation ends
+            # Set a flag that can be checked by the solver
+            self._all_layers_water = True
+    
+    def _diffuse_water_into_layer(self, layer_idx, water_mass_to_add, water_enthalpy_to_add, ice_layers):
+        """
+        Recursive function to diffuse water into an ice layer.
+        
+        Implements the diffusion equations:
+        1. m^1_{R,H_2O} = m^0_{R,H_2O} + m_{D,H_2O}  (add water mass)
+        2. α^1_{R,H_2O} = m^1_{R,H_2O} / (ρ_{H_2O} * δ_R)  (update alpha_water)
+        3. α^1_{R,ice} = α^0_{R,ice}  (keep alpha_ice same)
+        4. α^1_{R,air} = 1 - α^1_{R,H_2O} - α^1_{R,ice}  (update alpha_air)
+        5. Calculate new enthalpy
+        6. Check mushy zone:
+           - If below/in: update properties and return
+           - If above L_H2O: convert ice to water, update total_water_mass, recursively call self
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Index of the receiving ice layer
+        water_mass_to_add : float
+            Water mass to add from diffusion [kg/m²]
+        water_enthalpy_to_add : float
+            Total enthalpy of the water being added [J] (mass-weighted)
+        ice_layers : numpy.ndarray
+            Array of ice layer indices (for finding next layer if needed)
+        """
+        # Get current layer properties
+        dx = self.model.dx[layer_idx]  # dx is constant
+        alpha_ice = self.model.alpha_ice[layer_idx]
+        
+        # Get current water mass in receiver layer
+        if self.m_double_prime_water is not None:
+            water_mass_receiver = self.m_double_prime_water[layer_idx]
+        else:
+            alpha_water_current = self.model.alpha_water[layer_idx]
+            water_mass_receiver = alpha_water_current * self.model.rho_water * dx
+        
+        # Equation 1: Add water mass from diffusion layer(s) to receiver layer
+        total_water_mass = water_mass_receiver + water_mass_to_add
+        
+        # Equation 2: Update volume fraction of water in receiver layer
+        if dx > 0:
+            water_volume = total_water_mass / self.model.rho_water
+            alpha_water_new = water_volume / dx
+        else:
+            alpha_water_new = 0.0
+        
+        # Equation 3: Keep volume fraction of ice the same
+        alpha_ice_keep = alpha_ice
+        
+        # Equation 4: Update volume fraction of air from constraint
+        alpha_air_new = 1.0 - alpha_ice_keep - alpha_water_new
+        
+        # Calculate masses for enthalpy calculation
+        ice_mass = alpha_ice_keep * self.model.rho_ice * dx
+        air_mass = alpha_air_new * self.model.rho_air * dx
+        current_total_mass = ice_mass + water_mass_receiver + air_mass
+        new_total_mass = current_total_mass + water_mass_to_add
+        
+        if new_total_mass <= 0:
+            return
+        
+        # Equation 5: Calculate receiver's new enthalpy
+        # Use mass-weighted average: h_new = (h_receiver * m_receiver + h_diffusion * m_diffusion) / m_total
+        h_current = self.h[layer_idx]
+        h_new = (h_current * current_total_mass + water_enthalpy_to_add) / new_total_mass
+        
+        # Get mushy zone thresholds
+        L_f_i = self.L_f[layer_idx]
+        L_H2O_i = self.L_H2O[layer_idx]
+        
+        # Equation 6: Check mushy zone and update accordingly
+        if h_new > L_H2O_i:
+            # Above mushy zone: all ice becomes water, add to diffusion water mass, recursively call self
+            total_water_after_conversion = total_water_mass + ice_mass
+            
+            # Calculate total enthalpy after conversion (ice melts to water)
+            # The ice that melts contributes enthalpy h_new (since it's all water now)
+            total_water_enthalpy_after_conversion = water_enthalpy_to_add + h_new * ice_mass
+            
+            # Set current layer to all water
+            self._set_layer_to_all_water(layer_idx, total_water_after_conversion)
+            
+            # Find next nearby ice layer
+            remaining_ice_layers = ice_layers[ice_layers != layer_idx]
+            
+            if len(remaining_ice_layers) > 0:
+                # Find nearest ice layer
+                distances = np.abs(remaining_ice_layers - layer_idx)
+                next_ice_idx = remaining_ice_layers[np.argmin(distances)]
+                
+                # Recursively call diffusion function with updated water mass and enthalpy
+                self._diffuse_water_into_layer(next_ice_idx, total_water_after_conversion, total_water_enthalpy_after_conversion, remaining_ice_layers)
+            else:
+                # No more ice layers - all layers become water
+                self._all_layers_water = True
+                
+        elif h_new < L_f_i:
+            # Below mushy zone: update properties and temperature
+            self.h[layer_idx] = h_new
+            
+            # All water becomes ice
+            if dx > 0:
+                alpha_ice_new = new_total_mass / (self.model.rho_ice * dx)
+                self.model.alpha_ice[layer_idx] = alpha_ice_new
+                self.model.alpha_water[layer_idx] = 0.0
+                self.model.alpha_air[layer_idx] = 1.0 - alpha_ice_new - 0.0
+                
+                # Update mass per unit area
+                if self.m_double_prime_ice is not None:
+                    self.m_double_prime_ice[layer_idx] = alpha_ice_new * self.model.rho_ice * dx
+                if self.m_double_prime_water is not None:
+                    self.m_double_prime_water[layer_idx] = 0.0
+                
+                # Recalculate properties
+                self.model.calculate_specific_heat()
+                self.model.calculate_thermal_conductivity()
+                
+                # Update temperature
+                cp = self.model.cp[layer_idx]
+                if cp > 0:
+                    T_ref = self.model.T[layer_idx]
+                    dh = h_new - h_current
+                    dT = dh / cp
+                    self.model.T[layer_idx] = T_ref + dT
+        else:
+            # In mushy zone: update properties and temperature
+            self.h[layer_idx] = h_new
+            
+            # Update volume fractions
+            self.model.alpha_water[layer_idx] = alpha_water_new
+            self.model.alpha_ice[layer_idx] = alpha_ice_keep
+            self.model.alpha_air[layer_idx] = alpha_air_new
+            
+            # Update mass per unit area
+            if self.m_double_prime_water is not None:
+                self.m_double_prime_water[layer_idx] = total_water_mass
+            
+            # Recalculate properties
+            self.model.calculate_specific_heat()
+            self.model.calculate_thermal_conductivity()
+            
+            # Update temperature (stays at melting point in mushy zone)
+            self.model.T[layer_idx] = self.model.T_melt
+    
+    def _update_surface_and_wall_layers(self):
+        """
+        Update which layers are the beginning (facing air) and end (close to wall) after diffusion.
+        
+        After diffusion, outer layers (i=0, i=1, etc.) may have melted and diffused away.
+        This function finds:
+        - The first non-zero layer (new begin layer facing air)
+        - The last non-zero layer (new end layer closest to wall)
+        
+        Layers are considered "non-zero" if they have non-zero thickness (dx > 0).
+        For layers close to wall, if they melt, water diffuses into nearby ice layers
+        (no sloughing happens, so water stays in the system).
+        """
+        n = self.model.n_layers
+        if n == 0:
+            self.begin_idx = None
+            self.end_idx = None
+            return
+        
+        # Find all layers with non-zero thickness
+        non_zero_layers = np.where(self.model.dx > 1e-10)[0]
+        
+        if len(non_zero_layers) == 0:
+            # All layers are zero - no begin or end layer
+            self.begin_idx = None
+            self.end_idx = None
+            return
+        
+        # Begin layer: first non-zero layer (facing air)
+        # This is the layer that is now exposed to air after outer layers melted
+        self.begin_idx = non_zero_layers[0]
+        
+        # End layer: last non-zero layer (closest to wall)
+        # This is the layer that is now closest to the wall after outer layers melted
+        self.end_idx = non_zero_layers[-1]
+        
+        # Note: If begin_idx > 0, it means layers 0, 1, ..., begin_idx-1 have melted
+        # If end_idx < n-1, it means layers end_idx+1, ..., n-1 have melted
     
     def _update_temperature_from_enthalpy(self, h_old):
         """
@@ -720,10 +1397,9 @@ class DefrostSolver:
         h_old : numpy.ndarray
             Specific enthalpy at previous time step [J/kg]
         """
-        n = self.model.n_layers
         T_melt = self.model.T_melt
         
-        for i in range(n):
+        for i in range(self.begin_idx, self.end_idx + 1):
             h_new = self.h[i]
             h_prev = h_old[i]
             dh = h_new - h_prev
@@ -760,6 +1436,8 @@ class DefrostSolver:
                     # ΔT = Δh / C_p
                     dT = dh / cp
                     self.model.T[i] += dT
+                    if dT > 10:
+                        print(f"Warning: Layer {i} temperature change is too large: {dT} K")
                     
             else:
                 # Mushy zone: L_f[i] ≤ h ≤ L_H2O[i]
@@ -782,6 +1460,9 @@ class DefrostSolver:
                 else:
                     # Already in mushy zone, temperature stays constant
                     self.model.T[i] = T_melt
+
+            if self.model.T[i] > 12 or self.model.T[i] < -30:
+                print(f"Warning: Layer {i} temperature is too extreme: {self.model.T[i]} K")
     
     def _update_volume_fractions_from_heat_flux_first(self, q_fluxes):
         """
@@ -813,10 +1494,9 @@ class DefrostSolver:
         q_fluxes : dict
             Dictionary with 'in' and 'out' arrays of heat fluxes [W/m²] for each layer
         """
-        n = self.model.n_layers
         h_sl = self.model.L_fusion  # Latent heat of fusion [J/kg]
         
-        for i in range(n):
+        for i in range(self.begin_idx, self.end_idx + 1):
             # Check if enthalpy is in the mushy zone
             h_current = self.h[i]
             L_f_i = self.L_f[i]
@@ -934,10 +1614,9 @@ class DefrostSolver:
         numpy.ndarray
             Shrinkage rate for each layer [m/s]
         """
-        n = self.model.n_layers
-        shrinkage_rates = np.zeros(n)  # Store shrinkage rates for all layers
+        shrinkage_rates = np.zeros(self.model.n_layers)  # Store shrinkage rates for all layers
         
-        for i in range(n):
+        for i in range(self.begin_idx, self.end_idx + 1):
             # Get current values (after first volume fraction update)
             alpha_ice = self.model.alpha_ice[i]
             alpha_H2O = self.model.alpha_water[i]
@@ -1021,7 +1700,6 @@ class DefrostSolver:
         q_fluxes : dict
             Dictionary with 'in' and 'out' arrays of heat fluxes [W/m²] for each layer
         """
-        n = self.model.n_layers
         h_sl = self.model.L_fusion  # Latent heat of fusion [J/kg]
         
         # Initialize masses if not already done
@@ -1030,7 +1708,7 @@ class DefrostSolver:
         if self.m_double_prime_water is None:
             self.m_double_prime_water = self.model.alpha_water * self.model.rho_water * self.model.dx
         
-        for i in range(n):
+        for i in range(self.begin_idx, self.end_idx + 1):
             # Get current (time t) mass per unit area
             m_double_prime_ice_t = self.m_double_prime_ice[i]
             m_double_prime_water_t = self.m_double_prime_water[i]
@@ -1267,7 +1945,7 @@ class DefrostSolver:
         tau_base = self._calculate_base_adhesion(theta_deg)
         
         # Get water volume fraction from first layer (surface layer)
-        alpha_water_surface = self.model.alpha_water[0] if self.model.n_layers > 0 else 0.0
+        alpha_water_surface = self.model.alpha_water[self.begin_idx] if self.model.n_layers > 0 else 0.0
         
         # Calculate f(alpha_water)
         f_water = self._calculate_f_water(alpha_water_surface)
@@ -1389,7 +2067,7 @@ class DefrostSolver:
                 self.model.alpha_water[i] *= scale
                 self.model.alpha_air[i] *= scale
     
-    def solve(self, time_array, T_surface_array, save_history=True):
+    def solve(self, time_array, T_surface_array, save_history=True, history_save_interval=1.0):
         """
         Solve the defrost problem over the entire time domain.
         
@@ -1401,6 +2079,9 @@ class DefrostSolver:
             Surface temperature at each time point [°C]
         save_history : bool, optional
             Whether to save solution history. Default: True
+        history_save_interval : float, optional
+            Interval in seconds for saving history. Only saves history at this interval
+            to reduce memory usage. Default: 1.0 s. Always saves first and last time steps.
         
         Returns
         -------
@@ -1434,7 +2115,7 @@ class DefrostSolver:
             print(f"  Droplet spacing (δ): {retention_result['delta']*1e6:.2f} μm")
             print(f"{'='*70}\n")
         
-        # Initialize history
+        # Initialize history and sloughing info storage
         if save_history:
             self.time_history = []
             self.temperature_history = []
@@ -1445,20 +2126,117 @@ class DefrostSolver:
             self.h_crit_history = []
             self.h_total_history = []
             self.sloughing_status_history = []
+            
+            # Track last saved time for interval-based saving
+            last_saved_time = time_array[0] - history_save_interval  # Initialize to allow first save
+            
+            # Save initial state
+            self.time_history.append(time_array[0])
+            self.temperature_history.append(self.model.T.copy())
+            self.enthalpy_history.append(self.h.copy())
+            self.volume_fraction_history.append({
+                'ice': self.model.alpha_ice.copy(),
+                'water': self.model.alpha_water.copy(),
+                'air': self.model.alpha_air.copy()
+            })
+            self.dx_history.append(self.model.dx.copy())
+            if self.current_shrinkage_rates is not None:
+                self.shrinkage_rate_history.append(self.current_shrinkage_rates.copy())
+            else:
+                self.shrinkage_rate_history.append(np.zeros(self.model.n_layers))
+            # Initial sloughing check
+            sloughing_info = self._check_sloughing()
+            self.h_crit_history.append(sloughing_info['h_crit'])
+            self.h_total_history.append(sloughing_info['h_total'])
+            self.sloughing_status_history.append(sloughing_info['sloughing'])
+            self._latest_sloughing_info = sloughing_info  # Store for consistency
+        else:
+            # Initialize sloughing info storage even if not saving history
+            self._latest_sloughing_info = None
         
         # Time stepping
+        last_print_time = time_array[0] - 1.0  # Initialize to allow first print
+        last_progress_bar_time = time_array[0]  # Track last progress bar update
+        print_interval = 1.0  # Print progress every 1 second
+        progress_bar_interval = 0.1  # Update progress bar every 0.1 seconds
+        total_duration = time_array[-1] - time_array[0]
+        
+        # Print header for progress output
+        print(f"\nTime marching progress:")
+        print(f"  {'Time':<20} {'Surface Temp':<15} {'Total Thickness':<18}")
+        print(f"  {'-'*20} {'-'*15} {'-'*18}")
+        
         for i in range(1, n_steps):
             dt = time_array[i] - time_array[i-1]
             self.dt = dt
             
             # Interpolate surface temperature if needed
             T_surface = T_surface_array[i]
+            current_time = time_array[i]
             
             # Solve one time step
             success = self.solve_time_step(T_surface)
             
-            # Save history (before checking for sloughing, so arrays stay in sync)
+            # Check if all layers have become water (simulation should end)
+            if hasattr(self, '_all_layers_water') and self._all_layers_water:
+                print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s - all layers have become water")
+                break
+            
+            # Check if we should print detailed status
+            time_since_last_print = current_time - last_print_time
+            should_print_detailed = (time_since_last_print >= print_interval or i == 1 or i == n_steps - 1)
+            
+            # Update progress bar (more frequently, but not when printing detailed status)
+            time_since_last_progress = current_time - last_progress_bar_time
+            if time_since_last_progress >= progress_bar_interval and not should_print_detailed:
+                # Calculate progress percentage
+                elapsed_time = current_time - time_array[0]
+                progress_pct = min(100.0, (elapsed_time / total_duration) * 100.0) if total_duration > 0 else 0.0
+                
+                # Create progress bar (30 characters wide)
+                bar_width = 30
+                filled = int(bar_width * progress_pct / 100.0)
+                bar = '=' * filled + '>' + ' ' * (bar_width - filled - 1)
+                
+                # Calculate current total thickness for progress bar
+                h_total = np.sum(self.model.dx)
+                
+                # Print progress bar on same line (overwrite)
+                print(f"\r  [{bar}] {progress_pct:5.1f}% | "
+                      f"t = {current_time:7.1f} s | "
+                      f"T = {T_surface:6.2f}°C | "
+                      f"h = {h_total*1000:7.4f} mm", end='', flush=True)
+                last_progress_bar_time = current_time
+            
+            # Print detailed progress information (less frequently)
+            if should_print_detailed:
+                # Clear the progress bar line first
+                print('\r' + ' ' * 100 + '\r', end='', flush=True)
+                
+                # Calculate current total thickness
+                h_total = np.sum(self.model.dx)
+                
+                # Print detailed progress
+                time_min = current_time / 60.0
+                print(f"  {current_time:7.1f} s ({time_min:6.2f} min) | "
+                      f"{T_surface:6.2f}°C        | "
+                      f"{h_total*1000:7.4f} mm", flush=True)
+                last_print_time = current_time
+                last_progress_bar_time = current_time  # Reset progress bar timer
+            
+            # Determine if we should save history at this time step
+            should_save_history = False
             if save_history:
+                time_since_last_save = current_time - last_saved_time
+                is_last_step = (i == n_steps - 1)
+                
+                # Save if interval has passed or if this is the last step
+                if time_since_last_save >= history_save_interval or is_last_step:
+                    should_save_history = True
+                    last_saved_time = current_time
+            
+            # Save history (before checking for sloughing, so arrays stay in sync)
+            if should_save_history:
                 self.time_history.append(time_array[i])
                 self.temperature_history.append(self.model.T.copy())
                 self.enthalpy_history.append(self.h.copy())  # Save specific enthalpy
@@ -1473,10 +2251,24 @@ class DefrostSolver:
                     self.shrinkage_rate_history.append(self.current_shrinkage_rates.copy())
                 else:
                     self.shrinkage_rate_history.append(np.zeros(self.model.n_layers))
+                
+                # Save sloughing info (calculated in solve_time_step, stored in _latest_sloughing_info)
+                if hasattr(self, '_latest_sloughing_info'):
+                    sloughing_info = self._latest_sloughing_info
+                    self.h_crit_history.append(sloughing_info['h_crit'])
+                    self.h_total_history.append(sloughing_info['h_total'])
+                    self.sloughing_status_history.append(sloughing_info['sloughing'])
             
+            # Check for sloughing (check every step, even if not saving history)
             if not success:
-                # Check if sloughing occurred
-                if self.sloughing_status_history and len(self.sloughing_status_history) > 0 and self.sloughing_status_history[-1]:
+                # Check if sloughing occurred (use latest sloughing info if available)
+                sloughing_occurred = False
+                if hasattr(self, '_latest_sloughing_info'):
+                    sloughing_occurred = self._latest_sloughing_info.get('sloughing', False)
+                elif self.sloughing_status_history and len(self.sloughing_status_history) > 0:
+                    sloughing_occurred = self.sloughing_status_history[-1]
+                
+                if sloughing_occurred:
                     # Sloughing occurred - stop simulation
                     print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s due to sloughing")
                     break

@@ -196,7 +196,12 @@ class DefrostModel:
         
         # Convert to specific heat per unit mass: c_p,A = C_p,A / (ρ_A * δ_A)
         # Since C_p,A already includes δ_A, we divide by (ρ_A * δ_A)
-        self.cp = C_p_volumetric / (rho_eff * self.dx)
+        # Skip layers with dx = 0 (diffused away) to avoid division by zero
+        denominator = rho_eff * self.dx
+        # Use np.where to handle division by zero: set cp = 0 for layers with dx = 0
+        self.cp = np.where(denominator > 1e-10, 
+                          C_p_volumetric / denominator,
+                          0.0)
         
         # Store effective density
         self.rho = rho_eff
@@ -263,6 +268,9 @@ class DefrostModel:
         For interfaces between layer A and A+1 (A >= 1):
         R_A,A+1 = (δ_A + δ_A+1) / (2 * k_A,eff)
         
+        Only calculates resistances for active layers (non-zero thickness).
+        Skips layers that have been diffused away (dx = 0).
+        
         This function should be called at every time step as thermal conductivity
         and layer thicknesses may change during the defrost process.
         
@@ -272,6 +280,7 @@ class DefrostModel:
             Thermal resistance between layers [K·m²/W]
             Array has length (n_layers - 1), with R[i] being the resistance
             between layer i and layer i+1
+            R[i] = 0 if either layer i or layer i+1 has zero thickness
         """
         if self.k is None or self.dx is None:
             raise ValueError("Thermal conductivity and layer thicknesses must be calculated first")
@@ -279,12 +288,28 @@ class DefrostModel:
         n_interfaces = self.n_layers - 1
         R = np.zeros(n_interfaces)
         
+        # Find active layers (non-zero thickness)
+        active_layers = np.where(self.dx > 1e-10)[0]
+        
+        if len(active_layers) == 0:
+            # No active layers
+            return R
+        
         # For interface between layer 0 and layer 1: R = δ_0 / (2 * k_0,eff)
-        R[0] = self.dx[0] / (2.0 * self.k[0])
+        # Only if layer 0 is active
+        if 0 in active_layers and n_interfaces > 0:
+            R[0] = self.dx[0] / (2.0 * self.k[0])
         
         # For interfaces between layer A and A+1 (A >= 1): R = (δ_A + δ_A+1) / (2 * k_A,eff)
+        # Only calculate if both layers are active
         for i in range(1, n_interfaces):
-            R[i] = (self.dx[i] + self.dx[i+1]) / (2.0 * self.k[i])
+            if i in active_layers and (i + 1) in active_layers:
+                R[i] = (self.dx[i] + self.dx[i+1]) / (2.0 * self.k[i])
+                if R[i] < 1e-5:
+                    print(f"Warning: Layer {i} thermal resistance is too small: {R[i]} K·m²/W")
+            else:
+                # One or both layers are inactive (diffused away)
+                R[i] = 0.0
         
         return R
     

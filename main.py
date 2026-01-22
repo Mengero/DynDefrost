@@ -14,6 +14,7 @@ from model_init import initialize_model
 from solver import DefrostSolver
 from temperature_interpolation import interpolate_temperature, print_interpolation_info
 from stability_criterion import calculate_max_stable_dt, get_initial_frost_properties
+from surface_retention import calculate_surface_retention
 
 # Create figure directory if it doesn't exist
 figure_dir = Path("figure")
@@ -23,12 +24,12 @@ figure_dir.mkdir(exist_ok=True)
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "55min_60deg_83%_12C.txt"
-    n_layers = 40
+    data_file = "180min_60deg_55%_22C.txt"
+    # n_layers will be automatically calculated based on initial thickness and retention thickness
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed
     method = 'explicit'  # Solver method: 'explicit' or 'implicit'
-    dt_safety_factor = 0.5
+    dt_safety_factor = 0.8
     # ===========================
     
     # Load data
@@ -82,6 +83,40 @@ def main():
     print(f"\nUsing experiment data:")
     print(f"  Thickness: {frost_thickness*1000:.2f} mm ({frost_thickness:.4e} m)")
     print(f"  Porosity: {porosity:.3f}")
+    
+    # Calculate surface retention thickness to determine number of layers
+    # Determine contact angles from surface type
+    theta_receding = None
+    theta_advancing = None
+    if contact_angle_str is not None:
+        surface_type_clean = contact_angle_str.lower().strip()
+        if '60' in surface_type_clean or surface_type_clean == '60deg':
+            theta_receding = 60.0
+            theta_advancing = 70.0
+        elif '160' in surface_type_clean or surface_type_clean == '160deg':
+            theta_receding = 155.0
+            theta_advancing = 160.0
+    
+    # Calculate surface retention thickness if contact angles are available
+    if theta_receding is not None and theta_advancing is not None:
+        retention_result = calculate_surface_retention(theta_receding, theta_advancing)
+        surface_retention_thickness = retention_result['thickness']
+        
+        # Calculate number of layers: n_layers = initial_thickness / (retention_thickness / 2)
+        # This ensures each layer is approximately half the retention thickness
+        n_layers = int(np.round(frost_thickness / (surface_retention_thickness / 200)))
+        
+        # Ensure minimum of 1 layer
+        n_layers = max(1, n_layers)
+        
+        print(f"\nSurface retention calculation:")
+        print(f"  Contact angles: θ_R={theta_receding:.1f}°, θ_A={theta_advancing:.1f}°")
+        print(f"  Maximum retention thickness: {surface_retention_thickness*1000:.4f} mm")
+        print(f"  Calculated number of layers: {n_layers} (based on thickness / (retention_thickness / 2))")
+    else:
+        # Fallback: use a default number of layers if contact angles are not available
+        n_layers = 40
+        print(f"\nWarning: Contact angles not available. Using default n_layers = {n_layers}")
     
     # Automatically calculate optimal dt based on n_layers for explicit methods
     if method == 'explicit':
@@ -142,8 +177,9 @@ def main():
     print(f"  Duration: {time[-1]:.1f} s")
     print(f"  Method: {method}")
     print(f"  Time step: {dt} s")
+    print(f"  History save interval: 1.0 s (to reduce memory usage)")
     
-    results = solver.solve(time, temperature, save_history=True)
+    results = solver.solve(time, temperature, save_history=True, history_save_interval=1.0)
     
     print(f"\nSolution completed!")
     print(f"  Final time: {results['time'][-1]:.1f} s")

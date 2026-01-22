@@ -282,12 +282,12 @@ def test_dt_convergence(data_file="55min_60deg_83%_12C.txt", n_layers=40, method
     
     # Test different safety factors (from finest to coarsest)
     # Include lower values to verify convergence
-    # Reference should be the finest (most accurate) solution
+    # Reference should be a reasonably accurate solution for convergence testing
     # Note: Lower safety factors = smaller time steps = longer computation time
     #       but better accuracy. Use 0.3-0.4 for thorough verification,
     #       or 0.4-0.45 if computation time is a concern.
     safety_factors = [0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9]
-    reference_sf = 0.3  # Reference safety factor (finest, most accurate)
+    reference_sf = 0.3  # Reference safety factor (faster while still accurate)
     
     print(f"Testing {len(safety_factors)} different dt_safety_factor values...")
     print(f"Safety factors: {safety_factors}")

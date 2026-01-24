@@ -305,8 +305,8 @@ class DefrostModel:
         for i in range(1, n_interfaces):
             if i in active_layers and (i + 1) in active_layers:
                 R[i] = (self.dx[i] + self.dx[i+1]) / (2.0 * self.k[i])
-                if R[i] < 1e-5:
-                    print(f"Warning: Layer {i} thermal resistance is too small: {R[i]} K·m²/W")
+                # if R[i] < 1e-5:
+                #     print(f"Warning: Layer {i} thermal resistance is too small: {R[i]} K·m²/W")
             else:
                 # One or both layers are inactive (diffused away)
                 R[i] = 0.0

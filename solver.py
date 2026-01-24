@@ -361,8 +361,8 @@ class DefrostSolver:
                 q_net = q_fluxes['in'][i] - q_fluxes['out'][i]
                 self.h[i] = h_old[i] + (self.dt / m_double_prime) * q_net
                 
-                if abs((self.dt / m_double_prime) * q_net) > abs(self.h[i]):
-                    print(f"Warning: Layer {i} enthalpy change is too large: {abs((self.dt / m_double_prime) * q_net)} J/kg")
+                # if abs((self.dt / m_double_prime) * q_net) > abs(self.h[i]):
+                #     print(f"Warning: Layer {i} enthalpy change is too large: {abs((self.dt / m_double_prime) * q_net)} J/kg")
             else:
                 self.h[i] = h_old[i]
         
@@ -742,13 +742,13 @@ class DefrostSolver:
                 # Fallback to adiabatic if ambient temperature not set
                 q_out[end_idx] = 0.0
             
-            if abs(q_in[end_idx]) > 200 or abs(q_out[end_idx]) > 200:
-                print(f"Warning: End layer {end_idx} heat flux is too large: {abs(q_in[end_idx])} W/m² or {abs(q_out[end_idx])} W/m²")
+            # if abs(q_in[end_idx]) > 200 or abs(q_out[end_idx]) > 200:
+            #     print(f"Warning: End layer {end_idx} heat flux is too large: {abs(q_in[end_idx])} W/m² or {abs(q_out[end_idx])} W/m²")
         
         # Check for large fluxes in begin layer
-        if begin_idx in active_layers:
-            if abs(q_in[begin_idx]) > 200 or abs(q_out[begin_idx]) > 200:
-                print(f"Warning: Begin layer {begin_idx} heat flux is too large: {abs(q_in[begin_idx])} W/m² or {abs(q_out[begin_idx])} W/m²")
+        # if begin_idx in active_layers:
+        #     if abs(q_in[begin_idx]) > 200 or abs(q_out[begin_idx]) > 200:
+        #         print(f"Warning: Begin layer {begin_idx} heat flux is too large: {abs(q_in[begin_idx])} W/m² or {abs(q_out[begin_idx])} W/m²")
         
         return {'in': q_in, 'out': q_out}
 
@@ -1200,14 +1200,17 @@ class DefrostSolver:
         Recursive function to diffuse water into an ice layer.
         
         Implements the diffusion equations:
-        1. m^1_{R,H_2O} = m^0_{R,H_2O} + m_{D,H_2O}  (add water mass)
-        2. α^1_{R,H_2O} = m^1_{R,H_2O} / (ρ_{H_2O} * δ_R)  (update alpha_water)
-        3. α^1_{R,ice} = α^0_{R,ice}  (keep alpha_ice same)
-        4. α^1_{R,air} = 1 - α^1_{R,H_2O} - α^1_{R,ice}  (update alpha_air)
-        5. Calculate new enthalpy
-        6. Check mushy zone:
+        1. Check capacity: Calculate maximum water that can fit based on air volume fraction
+        2. Add water mass up to capacity: m^1_{R,H_2O} = m^0_{R,H_2O} + min(m_{D,H_2O}, capacity)
+        3. α^1_{R,H_2O} = m^1_{R,H_2O} / (ρ_{H_2O} * δ_R)  (update alpha_water)
+        4. α^1_{R,ice} = α^0_{R,ice}  (keep alpha_ice same)
+        5. α^1_{R,air} = 1 - α^1_{R,H_2O} - α^1_{R,ice}  (update alpha_air)
+        6. Calculate new enthalpy
+        7. Check mushy zone:
            - If below/in: update properties and return
            - If above L_H2O: convert ice to water, update total_water_mass, recursively call self
+        
+        If water_mass_to_add exceeds capacity, excess water is distributed to the next nearest ice layer.
         
         Parameters
         ----------
@@ -1223,6 +1226,7 @@ class DefrostSolver:
         # Get current layer properties
         dx = self.model.dx[layer_idx]  # dx is constant
         alpha_ice = self.model.alpha_ice[layer_idx]
+        alpha_air_current = self.model.alpha_air[layer_idx]
         
         # Get current water mass in receiver layer
         if self.m_double_prime_water is not None:
@@ -1231,8 +1235,24 @@ class DefrostSolver:
             alpha_water_current = self.model.alpha_water[layer_idx]
             water_mass_receiver = alpha_water_current * self.model.rho_water * dx
         
-        # Equation 1: Add water mass from diffusion layer(s) to receiver layer
-        total_water_mass = water_mass_receiver + water_mass_to_add
+        # Check capacity: maximum water that can fit in this layer
+        # Capacity = alpha_air * rho_water * dx (available air space)
+        max_water_capacity = alpha_air_current * self.model.rho_water * dx
+        
+        # Calculate how much water can actually be added to this layer
+        water_mass_that_fits = min(water_mass_to_add, max_water_capacity)
+        excess_water_mass = water_mass_to_add - water_mass_that_fits
+        
+        # Calculate enthalpy for the water that fits (proportional to mass)
+        if water_mass_to_add > 0:
+            water_enthalpy_that_fits = water_enthalpy_to_add * (water_mass_that_fits / water_mass_to_add)
+            excess_water_enthalpy = water_enthalpy_to_add - water_enthalpy_that_fits
+        else:
+            water_enthalpy_that_fits = 0.0
+            excess_water_enthalpy = 0.0
+        
+        # Equation 1: Add water mass from diffusion layer(s) to receiver layer (up to capacity)
+        total_water_mass = water_mass_receiver + water_mass_that_fits
         
         # Equation 2: Update volume fraction of water in receiver layer
         if dx > 0:
@@ -1251,7 +1271,7 @@ class DefrostSolver:
         ice_mass = alpha_ice_keep * self.model.rho_ice * dx
         air_mass = alpha_air_new * self.model.rho_air * dx
         current_total_mass = ice_mass + water_mass_receiver + air_mass
-        new_total_mass = current_total_mass + water_mass_to_add
+        new_total_mass = current_total_mass + water_mass_that_fits
         
         if new_total_mass <= 0:
             return
@@ -1259,7 +1279,7 @@ class DefrostSolver:
         # Equation 5: Calculate receiver's new enthalpy
         # Use mass-weighted average: h_new = (h_receiver * m_receiver + h_diffusion * m_diffusion) / m_total
         h_current = self.h[layer_idx]
-        h_new = (h_current * current_total_mass + water_enthalpy_to_add) / new_total_mass
+        h_new = (h_current * current_total_mass + water_enthalpy_that_fits) / new_total_mass
         
         # Get mushy zone thresholds
         L_f_i = self.L_f[layer_idx]
@@ -1272,7 +1292,7 @@ class DefrostSolver:
             
             # Calculate total enthalpy after conversion (ice melts to water)
             # The ice that melts contributes enthalpy h_new (since it's all water now)
-            total_water_enthalpy_after_conversion = water_enthalpy_to_add + h_new * ice_mass
+            total_water_enthalpy_after_conversion = water_enthalpy_that_fits + h_new * ice_mass
             
             # Set current layer to all water
             self._set_layer_to_all_water(layer_idx, total_water_after_conversion)
@@ -1285,8 +1305,12 @@ class DefrostSolver:
                 distances = np.abs(remaining_ice_layers - layer_idx)
                 next_ice_idx = remaining_ice_layers[np.argmin(distances)]
                 
+                # Combine excess water (if any) with converted water
+                total_water_to_next = total_water_after_conversion + excess_water_mass
+                total_enthalpy_to_next = total_water_enthalpy_after_conversion + excess_water_enthalpy
+                
                 # Recursively call diffusion function with updated water mass and enthalpy
-                self._diffuse_water_into_layer(next_ice_idx, total_water_after_conversion, total_water_enthalpy_after_conversion, remaining_ice_layers)
+                self._diffuse_water_into_layer(next_ice_idx, total_water_to_next, total_enthalpy_to_next, remaining_ice_layers)
             else:
                 # No more ice layers - all layers become water
                 self._all_layers_water = True
@@ -1319,6 +1343,22 @@ class DefrostSolver:
                     dh = h_new - h_current
                     dT = dh / cp
                     self.model.T[layer_idx] = T_ref + dT
+            
+            # If there's excess water that couldn't fit, distribute it to the next nearest ice layer
+            if excess_water_mass > 1e-10:  # Small tolerance to avoid numerical issues
+                remaining_ice_layers = ice_layers[ice_layers != layer_idx]
+                
+                if len(remaining_ice_layers) > 0:
+                    # Find nearest ice layer
+                    distances = np.abs(remaining_ice_layers - layer_idx)
+                    next_ice_idx = remaining_ice_layers[np.argmin(distances)]
+                    
+                    # Recursively distribute excess water to next layer
+                    self._diffuse_water_into_layer(next_ice_idx, excess_water_mass, excess_water_enthalpy, remaining_ice_layers)
+                else:
+                    # No more ice layers - excess water cannot be distributed
+                    # This shouldn't happen in normal operation, but handle gracefully
+                    pass
         else:
             # In mushy zone: update properties and temperature
             self.h[layer_idx] = h_new
@@ -1338,6 +1378,22 @@ class DefrostSolver:
             
             # Update temperature (stays at melting point in mushy zone)
             self.model.T[layer_idx] = self.model.T_melt
+            
+            # If there's excess water that couldn't fit, distribute it to the next nearest ice layer
+            if excess_water_mass > 1e-10:  # Small tolerance to avoid numerical issues
+                remaining_ice_layers = ice_layers[ice_layers != layer_idx]
+                
+                if len(remaining_ice_layers) > 0:
+                    # Find nearest ice layer
+                    distances = np.abs(remaining_ice_layers - layer_idx)
+                    next_ice_idx = remaining_ice_layers[np.argmin(distances)]
+                    
+                    # Recursively distribute excess water to next layer
+                    self._diffuse_water_into_layer(next_ice_idx, excess_water_mass, excess_water_enthalpy, remaining_ice_layers)
+                else:
+                    # No more ice layers - excess water cannot be distributed
+                    # This shouldn't happen in normal operation, but handle gracefully
+                    pass
     
     def _update_surface_and_wall_layers(self):
         """
@@ -1436,8 +1492,8 @@ class DefrostSolver:
                     # ΔT = Δh / C_p
                     dT = dh / cp
                     self.model.T[i] += dT
-                    if dT > 10:
-                        print(f"Warning: Layer {i} temperature change is too large: {dT} K")
+                    # if dT > 10:
+                    #     print(f"Warning: Layer {i} temperature change is too large: {dT} K")
                     
             else:
                 # Mushy zone: L_f[i] ≤ h ≤ L_H2O[i]
@@ -1461,8 +1517,8 @@ class DefrostSolver:
                     # Already in mushy zone, temperature stays constant
                     self.model.T[i] = T_melt
 
-            if self.model.T[i] > 12 or self.model.T[i] < -30:
-                print(f"Warning: Layer {i} temperature is too extreme: {self.model.T[i]} K")
+            # if self.model.T[i] > 12 or self.model.T[i] < -30:
+            #     print(f"Warning: Layer {i} temperature is too extreme: {self.model.T[i]} K")
     
     def _update_volume_fractions_from_heat_flux_first(self, q_fluxes):
         """

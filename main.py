@@ -104,7 +104,7 @@ def main():
         
         # Calculate number of layers: n_layers = initial_thickness / (retention_thickness / 2)
         # This ensures each layer is approximately half the retention thickness
-        n_layers = int(np.round(frost_thickness / (surface_retention_thickness / 200)))
+        n_layers = int(np.round(frost_thickness / 3e-5))
         
         # Ensure minimum of 1 layer
         n_layers = max(1, n_layers)
@@ -128,7 +128,7 @@ def main():
             k_eff=props['k_eff'],
             rho_eff=props['rho_eff'],
             cp_eff=props['cp_eff'],
-            safety_factor=0.5  # CFL condition uses 0.5
+            safety_factor=0.4  # CFL condition uses 0.5
         )
         
         # Auto-select dt as a fraction of max stable dt

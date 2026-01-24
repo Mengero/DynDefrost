@@ -389,8 +389,8 @@ def test_element_convergence(data_file="55min_60deg_83%_12C.txt", dt_safety_fact
     # Note: More layers = finer spatial resolution = longer computation time
     #       but better accuracy. Use 60-80 for thorough verification,
     #       or 40-50 if computation time is a concern.
-    n_layers_list = [20, 30, 40, 50, 60, 80, 100]
-    reference_n_layers = 100  # Reference number of layers (finest, most accurate)
+    n_layers_list = [20, 30, 40, 50, 60, 80, 100, 120, 150, 200]
+    reference_n_layers = 120  # Reference number of layers (finest, most accurate)
     
     print(f"Testing {len(n_layers_list)} different numbers of layers...")
     print(f"Number of layers: {n_layers_list}")

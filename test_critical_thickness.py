@@ -144,37 +144,34 @@ def calculate_critical_thickness(tau_base, f_water, rho_eff, k=1.0, g=9.81):
     return h_crit
 
 
-def calculate_effective_density(m_ice_total, m_water_total, h_total, 
+def calculate_effective_density(alpha_ice, alpha_water, dx, begin_idx, end_idx,
                                 rho_ice=917.0, rho_water=1000.0, rho_air=1.2):
     """
-    Calculate effective density of the entire frost layer.
+    Calculate effective density from the first layer containing frost (alpha_ice > 0)
+    counting from the wall side (end_idx) till end_idx.
     
-    ρ_eff = m_total / (h_total * A) = m_total / V_total
-    
-    For a unit area (A = 1 m²):
-    ρ_eff = (m_ice + m_water + m_air) / h_total
+    ρ_eff = m_total / h_total
     
     Where:
-    - m_ice = total ice mass per unit area [kg/m²]
-    - m_water = total water mass per unit area [kg/m²]
-    - m_air = total air mass per unit area [kg/m²]
-    - h_total = total frost thickness [m]
+    - m_total = total mass (ice + water + air) per unit area [kg/m²]
+    - h_total = total thickness from first frost layer to end_idx [m]
     
-    The air mass can be calculated from the volume:
-    V_total = h_total * A = h_total (for A = 1 m²)
-    V_ice = m_ice / ρ_ice
-    V_water = m_water / ρ_water
-    V_air = V_total - V_ice - V_water
-    m_air = V_air * ρ_air
+    The calculation starts from end_idx (wall side) and goes backwards to find
+    the first layer with alpha_ice > 0, then calculates density from that layer
+    to end_idx (inclusive).
     
     Parameters
     ----------
-    m_ice_total : float
-        Total ice mass per unit area [kg/m²]
-    m_water_total : float
-        Total water mass per unit area [kg/m²]
-    h_total : float
-        Total frost thickness [m]
+    alpha_ice : array-like
+        Ice volume fraction for each layer [-]
+    alpha_water : array-like
+        Water volume fraction for each layer [-]
+    dx : array-like
+        Layer thickness for each layer [m]
+    begin_idx : int
+        Starting index of active layers (surface side)
+    end_idx : int
+        Ending index of active layers (wall side)
     rho_ice : float, optional
         Ice density [kg/m³]. Default: 917.0
     rho_water : float, optional
@@ -187,6 +184,38 @@ def calculate_effective_density(m_ice_total, m_water_total, h_total,
     float
         Effective density [kg/m³]
     """
+    # Convert to numpy arrays if needed
+    alpha_ice = np.asarray(alpha_ice)
+    alpha_water = np.asarray(alpha_water)
+    dx = np.asarray(dx)
+    
+    # Find the first layer with frost (alpha_ice > 0) starting from wall side (end_idx)
+    # going backwards towards begin_idx
+    first_frost_idx = None
+    for i in range(end_idx, begin_idx - 1, -1):
+        if alpha_ice[i] > 1e-10:  # Layer contains ice
+            first_frost_idx = i
+            break
+    
+    # If no frost layer found, return 0.0
+    if first_frost_idx is None:
+        return 0.0
+    
+    # Calculate masses and thickness from first_frost_idx to end_idx (inclusive)
+    # Range: [first_frost_idx, end_idx]
+    layer_range = range(first_frost_idx, end_idx + 1)
+    
+    # Calculate masses per unit area for each layer in range
+    m_ice_layers = alpha_ice[layer_range] * rho_ice * dx[layer_range]
+    m_water_layers = alpha_water[layer_range] * rho_water * dx[layer_range]
+    
+    # Total masses
+    m_ice_total = np.sum(m_ice_layers)
+    m_water_total = np.sum(m_water_layers)
+    
+    # Total thickness
+    h_total = np.sum(dx[layer_range])
+    
     if h_total > 0:
         # Calculate volumes
         V_total = h_total  # For unit area A = 1 m²
@@ -220,13 +249,36 @@ if __name__ == "__main__":
     g = 9.81  # Gravitational acceleration [m/s²]
     
     # Assume some typical values for testing
-    m_ice_total = 0.5  # kg/m² (total ice mass per unit area)
-    m_water_total = 0.0  # kg/m² (no water initially)
+    # Create dummy layer arrays for testing
     h_total = 0.005  # 5 mm (total frost thickness)
-    rho_eff = calculate_effective_density(m_ice_total, m_water_total, h_total)
+    n_layers = 10
+    alpha_ice_test = np.zeros(n_layers)
+    alpha_water_test = np.zeros(n_layers)
+    dx_test = np.full(n_layers, h_total / n_layers)  # Uniform layer thickness
+    
+    # Fill layers with ice (typical porosity ~0.9, so alpha_ice ~0.1)
+    # Distribute ice mass: m_ice = alpha_ice * rho_ice * dx
+    # For m_ice_total = 0.5 kg/m², h_total = 0.005 m, n_layers = 10
+    # Each layer: m_ice_layer = 0.5 / 10 = 0.05 kg/m²
+    # alpha_ice = m_ice / (rho_ice * dx) = 0.05 / (917 * 0.0005) ≈ 0.109
+    m_ice_per_layer = 0.5 / n_layers  # kg/m² per layer
+    alpha_ice_per_layer = m_ice_per_layer / (917.0 * dx_test[0])
+    alpha_ice_test[:] = alpha_ice_per_layer
+    alpha_water_test[:] = 0.0  # No water initially
+    
+    begin_idx = 0
+    end_idx = n_layers - 1
+    
+    rho_eff = calculate_effective_density(alpha_ice_test, alpha_water_test, dx_test, 
+                                          begin_idx, end_idx)
+    
+    # Calculate total masses for display
+    m_ice_total = np.sum(alpha_ice_test * 917.0 * dx_test)
+    m_water_total = np.sum(alpha_water_test * 1000.0 * dx_test)
     
     print(f"\nTest Conditions:")
     print(f"  Total ice mass: {m_ice_total:.3f} kg/m²")
+    print(f"  Total water mass: {m_water_total:.3f} kg/m²")
     print(f"  Total frost thickness: {h_total*1000:.2f} mm")
     print(f"  Effective density: {rho_eff:.1f} kg/m³")
     print(f"  Water volume fraction range: 0.0 to 1.0")

@@ -1916,11 +1916,16 @@ class DefrostSolver:
     
     def _calculate_effective_density(self):
         """
-        Calculate effective density of the entire frost layer.
+        Calculate effective density from the first layer containing frost (alpha_ice > 0)
+        counting from the wall side (end_idx) till end_idx.
         
         ρ_eff = m_total / h_total
         
         Where m_total includes ice, water, and air masses.
+        
+        The calculation starts from end_idx (wall side) and goes backwards to find
+        the first layer with alpha_ice > 0, then calculates density from that layer
+        to end_idx (inclusive).
         
         Returns
         -------
@@ -1933,12 +1938,28 @@ class DefrostSolver:
         if self.m_double_prime_water is None:
             self.m_double_prime_water = self.model.alpha_water * self.model.rho_water * self.model.dx
         
-        # Calculate total masses per unit area
-        m_ice_total = np.sum(self.m_double_prime_ice)
-        m_water_total = np.sum(self.m_double_prime_water)
+        # Find the first layer with frost (alpha_ice > 0) starting from wall side (end_idx)
+        # going backwards towards begin_idx
+        first_frost_idx = None
+        for i in range(self.end_idx, self.begin_idx - 1, -1):
+            if self.model.alpha_ice[i] > 1e-10:  # Layer contains ice
+                first_frost_idx = i
+                break
         
-        # Calculate total thickness
-        h_total = np.sum(self.model.dx)
+        # If no frost layer found, return 0.0
+        if first_frost_idx is None:
+            return 0.0
+        
+        # Calculate masses and thickness from first_frost_idx to end_idx (inclusive)
+        # Range: [first_frost_idx, end_idx]
+        layer_range = range(first_frost_idx, self.end_idx + 1)
+        
+        # Calculate total masses per unit area for layers in range
+        m_ice_total = np.sum(self.m_double_prime_ice[layer_range])
+        m_water_total = np.sum(self.m_double_prime_water[layer_range])
+        
+        # Calculate total thickness for layers in range
+        h_total = np.sum(self.model.dx[layer_range])
         
         if h_total > 0:
             # Calculate volumes
@@ -2219,8 +2240,8 @@ class DefrostSolver:
         
         # Print header for progress output
         print(f"\nTime marching progress:")
-        print(f"  {'Time':<20} {'Surface Temp':<15} {'Total Thickness':<18}")
-        print(f"  {'-'*20} {'-'*15} {'-'*18}")
+        print(f"  {'Time':<20} {'Surface Temp':<15} {'Total Thickness':<18} {'Critical Thickness':<20} {'Effective Density':<20}")
+        print(f"  {'-'*20} {'-'*15} {'-'*18} {'-'*20} {'-'*20}")
         
         for i in range(1, n_steps):
             dt = time_array[i] - time_array[i-1]
@@ -2257,11 +2278,30 @@ class DefrostSolver:
                 # Calculate current total thickness for progress bar
                 h_total = np.sum(self.model.dx)
                 
+                # Get critical thickness from latest sloughing info
+                if hasattr(self, '_latest_sloughing_info') and self._latest_sloughing_info is not None:
+                    h_crit = self._latest_sloughing_info.get('h_crit', np.inf)
+                else:
+                    sloughing_info = self._check_sloughing()
+                    h_crit = sloughing_info.get('h_crit', np.inf)
+                
+                # Format critical thickness (use 'inf' if infinite)
+                if h_crit < np.inf:
+                    h_crit_str = f"{h_crit*1000:7.4f} mm"
+                else:
+                    h_crit_str = "    inf mm"
+                
+                # Calculate effective density
+                rho_eff = self._calculate_effective_density()
+                rho_eff_str = f"{rho_eff:7.2f} kg/m³" if rho_eff > 0 else "   0.00 kg/m³"
+                
                 # Print progress bar on same line (overwrite)
                 print(f"\r  [{bar}] {progress_pct:5.1f}% | "
                       f"t = {current_time:7.1f} s | "
                       f"T = {T_surface:6.2f}°C | "
-                      f"h = {h_total*1000:7.4f} mm", end='', flush=True)
+                      f"h = {h_total*1000:7.4f} mm | "
+                      f"h_crit = {h_crit_str} | "
+                      f"ρ_eff = {rho_eff_str}", end='', flush=True)
                 last_progress_bar_time = current_time
             
             # Print detailed progress information (less frequently)
@@ -2272,11 +2312,30 @@ class DefrostSolver:
                 # Calculate current total thickness
                 h_total = np.sum(self.model.dx)
                 
+                # Get critical thickness from latest sloughing info
+                if hasattr(self, '_latest_sloughing_info') and self._latest_sloughing_info is not None:
+                    h_crit = self._latest_sloughing_info.get('h_crit', np.inf)
+                else:
+                    sloughing_info = self._check_sloughing()
+                    h_crit = sloughing_info.get('h_crit', np.inf)
+                
+                # Format critical thickness (use 'inf' if infinite)
+                if h_crit < np.inf:
+                    h_crit_str = f"{h_crit*1000:7.4f} mm"
+                else:
+                    h_crit_str = "    inf mm"
+                
+                # Calculate effective density
+                rho_eff = self._calculate_effective_density()
+                rho_eff_str = f"{rho_eff:7.2f} kg/m³" if rho_eff > 0 else "   0.00 kg/m³"
+                
                 # Print detailed progress
                 time_min = current_time / 60.0
                 print(f"  {current_time:7.1f} s ({time_min:6.2f} min) | "
                       f"{T_surface:6.2f}°C        | "
-                      f"{h_total*1000:7.4f} mm", flush=True)
+                      f"{h_total*1000:7.4f} mm | "
+                      f"{h_crit_str} | "
+                      f"{rho_eff_str}", flush=True)
                 last_print_time = current_time
                 last_progress_bar_time = current_time  # Reset progress bar timer
             

@@ -8,6 +8,7 @@ The solver updates enthalpy based on heat flux, then updates temperature
 according to enthalpy zones (solid, mushy, liquid).
 """
 
+from re import T
 import numpy as np
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
@@ -333,6 +334,7 @@ class DefrostSolver:
         
         h^(t+Δt) = h^t + (Δt / m'') * q^t
         """
+        
         # Step 0: Check for diffusion/merging of melted layers
         self._process_water_diffusion()
         
@@ -355,6 +357,7 @@ class DefrostSolver:
         # h_A^(t+Δt) = h_A^t + (Δt / m'') * (q_in'' - q_out'')^t
         # Only update layers from begin_idx to end_idx (active layers)       
         for i in range(self.begin_idx, self.end_idx + 1):
+            
             m_double_prime = self.model.rho[i] * self.model.dx[i]
             
             if m_double_prime > 0:
@@ -374,6 +377,7 @@ class DefrostSolver:
         # This uses the equations: α^(t,1) = α^t - (Δt * q_net) / (h_sl * ρ) * δ
         self._update_volume_fractions_from_heat_flux_first(q_fluxes)
         
+
         # Step 5: Calculate layer shrinkage (thickness reduction)
         # This uses: 1/δ_A * d(δ_A)/dt = -σ / (η_eff * r_pore)
         shrinkage_rates = self._calculate_layer_shrinkage()
@@ -452,147 +456,10 @@ class DefrostSolver:
         """
         Implicit solver: heat fluxes evaluated at future time t+Δt.
         
-        h^(t+Δt) = h^t + (Δt / m'') * q^(t+Δt)
-        
-        Since q^(t+Δt) depends on T^(t+Δt), and T^(t+Δt) depends on h^(t+Δt),
-        we need to solve this iteratively.
-        
-        Uses Picard iteration (fixed-point iteration).
+        TODO: Implement implicit solver properly.
+        For now, this is a placeholder that raises an error.
         """
-        # Update boundary condition
-        self.model.T_surface = T_surface
-        
-        # Store old state
-        h_old = self.h.copy()
-        T_old = self.model.T.copy()
-        
-        # Initial guess: use explicit step as starting point
-        h_new = h_old.copy()
-        T_new = T_old.copy()
-        
-        # Iterate until convergence
-        for iteration in range(self.max_iter):
-            # Store previous iteration values
-            h_prev = h_new.copy()
-            T_prev = T_new.copy()
-            
-            # Update model state for this iteration
-            self.model.T = T_new.copy()
-            self.h = h_new.copy()
-            
-            # Merge fully melted layers (alpha_ice = 0) into nearby ice layers
-            self._process_water_diffusion()
-            
-            # Calculate heat fluxes (IMPLICIT: using T^(t+Δt))
-            # Note: Uses future temperatures T_new (T^(t+Δt))
-            q_fluxes = self._calculate_heat_fluxes_general(T_surface, T_new)
-            
-            # Update enthalpy: h^(t+Δt) = h^t + (Δt / m'') * q^(t+Δt)
-            for i in range(self.model.n_layers):
-                m_double_prime = self.model.rho[i] * self.model.dx[i]
-                
-                if m_double_prime > 0:
-                    q_net = q_fluxes['in'][i] - q_fluxes['out'][i]
-                    h_new[i] = h_old[i] + (self.dt / m_double_prime) * q_net
-                else:
-                    h_new[i] = h_old[i]
-            
-            # Update temperature from new enthalpy
-            self.h = h_new.copy()
-            self._update_temperature_from_enthalpy(h_old)
-            T_new = self.model.T.copy()
-            
-            # Update volume fractions based on heat flux (using previous time step)
-            self._update_volume_fractions_from_heat_flux_first(q_fluxes)
-            
-            # Calculate layer shrinkage (thickness reduction)
-            shrinkage_rates = self._calculate_layer_shrinkage()
-            self.current_shrinkage_rates = shrinkage_rates.copy()  # Store for history
-            
-            # Second volume fraction update based on mass per unit area and new thickness
-            self._update_volume_fractions_second(q_fluxes)
-            
-            # Update properties based on current guess
-            self.model.calculate_specific_heat()
-            self.model.calculate_thermal_conductivity()
-            
-            # Calculate critical sloughing thickness (only on last iteration to avoid duplicates)
-            # This will be done after convergence
-            
-            # Check convergence
-            max_change_h = np.max(np.abs(h_new - h_prev))
-            max_change_T = np.max(np.abs(T_new - T_prev))
-            
-            if max_change_h < self.tolerance and max_change_T < self.tolerance:
-                # Converged!
-                self.h = h_new
-                self.model.T = T_new
-                break
-        
-        # Final update of properties
-        self.model.calculate_specific_heat()
-        self.model.calculate_thermal_conductivity()
-        
-        # Calculate critical sloughing thickness and check if frost can survive
-        sloughing_info = self._check_sloughing()
-        # Store sloughing info temporarily (will be saved to history in solve() if needed)
-        self._latest_sloughing_info = sloughing_info
-        
-        # Check if sloughing occurs
-        if sloughing_info['sloughing']:
-            # Calculate water retention from the layer closest to the wall (first layer)
-            if self.model.n_layers > 0:
-                # Water mass per unit area in the first layer
-                water_retention = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
-                self.model.surface_retention = water_retention  # [kg/m²]
-                self.model.surface_retention_thickness = water_retention / self.model.rho_water  # [m]
-                
-                # Set everything to 0 except the layer closest to the wall
-                # Set all layers except first to zero thickness
-                for i in range(1, self.model.n_layers):
-                    self.model.dx[i] = 0.0
-                    self.model.alpha_ice[i] = 0.0
-                    self.model.alpha_water[i] = 0.0
-                    self.model.alpha_air[i] = 0.0
-                    self.model.T[i] = 0.0
-                    self.model.H[i] = 0.0
-                    self.m_double_prime_ice[i] = 0.0
-                    self.m_double_prime_water[i] = 0.0
-                
-                # Set first layer: alpha_water = 1, everything else = 0
-                self.model.dx[0] = self.model.surface_retention_thickness
-                self.model.alpha_ice[0] = 0.0
-                self.model.alpha_water[0] = 1.0
-                self.model.alpha_air[0] = 0.0
-                # Update masses for first layer
-                self.m_double_prime_ice[0] = 0.0
-                self.m_double_prime_water[0] = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
-                
-                print(f"\n{'='*70}")
-                print("SLOUGHING DETECTED!")
-                print(f"{'='*70}")
-                print(f"  h_total = {sloughing_info['h_total']*1000:.4f} mm")
-                print(f"  h_crit = {sloughing_info['h_crit']*1000:.4f} mm")
-                print(f"  Safety factor = {sloughing_info['safety_factor']:.4f}")
-                print(f"  Surface water retention = {water_retention*1000:.2f} g/m²")
-                print(f"  Surface water retention thickness = {self.model.surface_retention_thickness*1000:.4f} mm")
-                print(f"  Layer 0: alpha_water = {self.model.alpha_water[0]:.3f}, thickness = {self.model.dx[0]*1000:.4f} mm")
-                print(f"  All other layers set to zero")
-                print(f"{'='*70}\n")
-            
-            # Return False to indicate simulation should stop
-            return False
-        
-        # Update volumetric enthalpy
-        for i in range(self.model.n_layers):
-            self.model.H[i] = self.h[i] * self.model.rho[i]
-        
-        # Store current volume fractions as previous for next time step
-        self.alpha_ice_prev = self.model.alpha_ice.copy()
-        self.alpha_water_prev = self.model.alpha_water.copy()
-        self.alpha_air_prev = self.model.alpha_air.copy()
-        
-        return True
+        raise NotImplementedError("Implicit solver is not yet implemented. Please use explicit solver.")
     
     def _calculate_heat_fluxes(self, T_surface):
         """

@@ -88,7 +88,7 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
     surface_retention_thickness = retention_result['thickness']
     
     # This ensures each layer is approximately half the retention thickness
-    n_layers = int(np.round(frost_thickness / 3e-5))
+    n_layers = int(np.round(frost_thickness / 7e-5))
     n_layers = max(1, n_layers)
     
     # Calculate dt based on method (same as main.py)
@@ -101,7 +101,7 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
             k_eff=props['k_eff'],
             rho_eff=props['rho_eff'],
             cp_eff=props['cp_eff'],
-            safety_factor=0.4  # CFL condition uses 0.5
+            safety_factor=0.5  # CFL condition uses 0.5
         )
         # Auto-select dt as a fraction of max stable dt
         dt = dt_max * dt_safety_factor
@@ -148,7 +148,22 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
     sloughing_time = None
     completely_melted = False
     
-    if results['sloughing'] is not None and len(results['sloughing']) > 0:
+    # First check the solver's internal sloughing info (most reliable when simulation stops early)
+    # This has the h_crit value from BEFORE the state was modified
+    if hasattr(solver, '_latest_sloughing_info') and solver._latest_sloughing_info is not None:
+        if solver._latest_sloughing_info.get('sloughing', False):
+            sloughing = True
+            # Get time from results if available, otherwise use last time
+            if results['time'] is not None and len(results['time']) > 0:
+                sloughing_time = results['time'][-1]
+            # Store h_crit from solver's internal info (this is the value BEFORE state modification)
+            # This is more reliable than the history which might have invalid values after sloughing
+            if 'h_crit_at_sloughing' not in results:
+                results['h_crit_at_sloughing'] = solver._latest_sloughing_info.get('h_crit')
+                results['h_total_at_sloughing'] = solver._latest_sloughing_info.get('h_total')
+    
+    # Also check results history (in case sloughing was saved to history)
+    if not sloughing and results['sloughing'] is not None and len(results['sloughing']) > 0:
         sloughing_indices = np.where(results['sloughing'] == True)[0]
         if len(sloughing_indices) > 0:
             sloughing = True
@@ -177,10 +192,20 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
 
 
 def find_threshold_thickness(porosity, time, temperature, T_ambient=12.0,
-                             thickness_min=0.001, thickness_max=0.005,
-                             n_cases=8):
+                             start_thickness=0.0005, increment=0.00025, max_thickness=0.01):
     """
-    Find the threshold frost thickness for sloughing by testing multiple thickness values.
+    Find the threshold frost thickness for sloughing by running simulations
+    with increasing initial thickness until sloughing occurs.
+    
+    For a given porosity:
+    1. Start with start_thickness (default: 0.5 mm)
+    2. Run simulation
+    3. If sloughing occurs, check if h_crit >= 0.5 mm at sloughing moment
+       - If h_crit < 0.5 mm, treat as no sloughing (too thin) and continue
+    4. If no sloughing, increase thickness by increment (default: 0.25 mm) and try again
+    5. Repeat until valid sloughing occurs or max_thickness is reached
+    6. When valid sloughing occurs, record the thickness at that moment
+    7. That thickness becomes the threshold for this porosity
     
     Parameters:
     -----------
@@ -192,45 +217,104 @@ def find_threshold_thickness(porosity, time, temperature, T_ambient=12.0,
         Temperature array [°C]
     T_ambient : float
         Ambient temperature [°C]
-    thickness_min : float
-        Minimum thickness to test [m]
-    thickness_max : float
+    start_thickness : float
+        Initial frost thickness to start testing [m]
+        Default: 0.0005 m (0.5 mm)
+    increment : float
+        Thickness increment to add if no sloughing [m]
+        Default: 0.00025 m (0.25 mm)
+    max_thickness : float
         Maximum thickness to test [m]
-    n_cases : int
-        Number of thickness values to test
+        Default: 0.01 m (10 mm)
         
     Returns:
     --------
     float
-        Threshold thickness [m], or None if not found
+        Threshold thickness [m] at moment of sloughing, or None if no sloughing occurred
     """
     # Use explicit method (same as main.py)
     method = 'explicit'
-    dt_safety_factor = 0.8
+    dt_safety_factor = 0.5
     
-    # Create list of thickness values to test (from smallest to largest)
-    thickness_values = np.linspace(thickness_min, thickness_max, n_cases)
+    current_thickness = start_thickness
+    iteration = 0
     
-    print(f"      Testing {n_cases} thickness values from {thickness_min*1000:.1f} to {thickness_max*1000:.1f} mm")
+    print(f"      Starting from {start_thickness*1000:.2f} mm, increment: {increment*1000:.2f} mm")
     
-    # Run simulations sequentially, stop at first sloughing
-    threshold = None
-    for thickness in thickness_values:
-        result = run_simulation(thickness, porosity, time, temperature, T_ambient, method, dt_safety_factor)
+    while current_thickness <= max_thickness:
+        iteration += 1
+        print(f"      Iteration {iteration}: Testing thickness = {current_thickness*1000:.2f} mm")
         
-        status = "Sloughing!" if result['sloughing'] else ("Completely melted" if result['completely_melted'] else "No sloughing")
-        print(f"        {thickness*1000:.3f} mm: {status}")
+        # Run simulation with current thickness
+        result = run_simulation(current_thickness, porosity, time, temperature, T_ambient, method, dt_safety_factor)
         
         if result['sloughing']:
-            # Found sloughing - this is the threshold (smallest thickness tested that causes sloughing)
-            threshold = thickness
-            print(f"      Threshold found: {threshold*1000:.3f} mm (first thickness with sloughing)")
-            break  # Stop testing once we find sloughing
+            # Sloughing occurred - check if it's valid (h_crit >= 0.5 mm)
+            # Try to get sloughing index from history first
+            sloughing_indices = np.where(result['results']['sloughing'] == True)[0] if result['results']['sloughing'] is not None else []
+            
+            # If not in history, use last index (simulation stopped early)
+            if len(sloughing_indices) > 0:
+                sloughing_idx = sloughing_indices[0]
+            else:
+                # Simulation stopped early, use last saved index
+                sloughing_idx = -1
+            
+            # Check h_crit at the moment of sloughing
+            # IMPORTANT: Get h_crit from solver's internal info (before state was modified)
+            # The history might have invalid values after sloughing occurred
+            h_crit_at_sloughing = None
+            if 'h_crit_at_sloughing' in result['results']:
+                h_crit_at_sloughing = result['results']['h_crit_at_sloughing']
+            elif result['results']['h_crit'] is not None and len(result['results']['h_crit']) > 0:
+                # Fallback: use second-to-last value (before sloughing modified state)
+                # The last value might be invalid after layers were set to zero
+                if len(result['results']['h_crit']) > 1:
+                    h_crit_at_sloughing = result['results']['h_crit'][-2]  # Second-to-last
+                else:
+                    h_crit_at_sloughing = result['results']['h_crit'][-1]
+            
+            # If h_crit < 0.5 mm, treat as no sloughing (too thin)
+            if h_crit_at_sloughing is not None and h_crit_at_sloughing < 0.0005:
+                print(f"      → Sloughing detected but h_crit = {h_crit_at_sloughing*1000:.2f} mm < 0.5 mm (too thin), treating as no sloughing")
+                current_thickness += increment
+                continue
+            
+            # Get h_total at the moment of sloughing
+            # IMPORTANT: Get h_total from solver's internal info (before state was modified)
+            threshold = None
+            if 'h_total_at_sloughing' in result['results']:
+                threshold = result['results']['h_total_at_sloughing']
+            elif result['results']['h_total'] is not None and len(result['results']['h_total']) > 0:
+                # Fallback: use second-to-last value (before sloughing modified state)
+                # The last value might be invalid after layers were set to zero
+                if len(result['results']['h_total']) > 1:
+                    threshold = result['results']['h_total'][-2]  # Second-to-last
+                else:
+                    threshold = result['results']['h_total'][-1]
+            
+            if threshold is not None:
+                sloughing_time = result['sloughing_time'] if result['sloughing_time'] is not None else (result['results']['time'][-1] if result['results']['time'] is not None and len(result['results']['time']) > 0 else None)
+                h_crit_str = f", h_crit = {h_crit_at_sloughing*1000:.2f} mm" if h_crit_at_sloughing is not None else ""
+                time_str = f"t = {sloughing_time:.1f} s" if sloughing_time is not None else "final time"
+                print(f"      ✓ Valid sloughing detected at {time_str}{h_crit_str}")
+                print(f"      ✓ Threshold thickness: {threshold*1000:.3f} mm (thickness at sloughing)")
+                return threshold
+            else:
+                print(f"      Sloughing detected but h_total data not available")
+                return None
+        elif result['completely_melted']:
+            print(f"      → Frost completely melted (no sloughing), increasing thickness...")
+            # Increase thickness and try again
+            current_thickness += increment
+        else:
+            print(f"      → No sloughing detected, increasing thickness...")
+            # Increase thickness and try again
+            current_thickness += increment
     
-    if threshold is None:
-        print(f"      No sloughing detected in tested range")
-    
-    return threshold
+    # If we reach here, we've exceeded max_thickness without finding sloughing
+    print(f"      ✗ No sloughing detected up to {max_thickness*1000:.1f} mm")
+    return None
 
 
 
@@ -267,26 +351,30 @@ def plot_threshold_curve(data_file='exp_data/defrost_sloughing_experiment_data.c
     for p in porosities:
         print(f"    {p:.3f}")
     
-    # Find threshold thickness for each porosity (in parallel)
+    # Find threshold thickness for each porosity
     print("\nFinding threshold thickness for each porosity...")
     T_ambient = 12.0  # 12°C ambient condition
-    thickness_min = 0.001  # 1 mm
-    thickness_max = 0.005  # 5 mm
-    n_cases = 8  # Number of thickness values to test per porosity
+    start_thickness = 0.0005  # 0.5 mm starting thickness
+    increment = 0.00025  # 0.25 mm increment
+    max_thickness = 0.01  # 10 mm maximum thickness
     
     threshold_thicknesses = []
     threshold_porosities = []
     
     # Find threshold thickness for each porosity (sequential)
-    print(f"  Each porosity will test {n_cases} thickness values")
+    print(f"  For each porosity:")
+    print(f"    - Start with {start_thickness*1000:.1f} mm initial thickness")
+    print(f"    - If no sloughing, increase by {increment*1000:.1f} mm and try again")
+    print(f"    - Continue until sloughing occurs or reach {max_thickness*1000:.1f} mm")
+    print(f"    - Record thickness at moment of sloughing")
     for i, porosity in enumerate(porosities):
         print(f"\n  Porosity {i+1}/{len(porosities)}: {porosity:.3f}")
         
         threshold = find_threshold_thickness(
             porosity, time, temperature, T_ambient,
-            thickness_min=thickness_min,
-            thickness_max=thickness_max,
-            n_cases=n_cases
+            start_thickness=start_thickness,
+            increment=increment,
+            max_thickness=max_thickness
         )
         
         if threshold is not None:
@@ -294,7 +382,7 @@ def plot_threshold_curve(data_file='exp_data/defrost_sloughing_experiment_data.c
             threshold_porosities.append(porosity)
             print(f"    Threshold thickness: {threshold*1000:.3f} mm")
         else:
-            print(f"    Warning: Could not find threshold in range {thickness_min*1000:.1f}-{thickness_max*1000:.1f} mm")
+            print(f"    Warning: No sloughing detected for this porosity")
     
     if len(threshold_thicknesses) == 0:
         print("\nERROR: No threshold values found!")

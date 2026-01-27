@@ -248,43 +248,64 @@ if __name__ == "__main__":
     alpha_water_values = np.linspace(0.0, 1.0, 21)  # 0 to 1 in steps of 0.05
     g = 9.81  # Gravitational acceleration [m/s²]
     
-    # Assume some typical values for testing
+    # Test cases: different frost densities
+    test_cases = {
+        'low_density': {
+            'name': 'Low Density Frost',
+            'alpha_ice': 0.1,  # ~0.1 (porosity ~0.9)
+            'description': 'alpha_ice ≈ 0.1 (porosity ~0.9)'
+        },
+        'high_density': {
+            'name': 'Dense Frost',
+            'alpha_ice': 0.35,  # 0.35 (porosity ~0.65)
+            'description': 'alpha_ice = 0.35 (porosity ~0.65)'
+        }
+    }
+    
     # Create dummy layer arrays for testing
     h_total = 0.005  # 5 mm (total frost thickness)
     n_layers = 10
-    alpha_ice_test = np.zeros(n_layers)
-    alpha_water_test = np.zeros(n_layers)
     dx_test = np.full(n_layers, h_total / n_layers)  # Uniform layer thickness
-    
-    # Fill layers with ice (typical porosity ~0.9, so alpha_ice ~0.1)
-    # Distribute ice mass: m_ice = alpha_ice * rho_ice * dx
-    # For m_ice_total = 0.5 kg/m², h_total = 0.005 m, n_layers = 10
-    # Each layer: m_ice_layer = 0.5 / 10 = 0.05 kg/m²
-    # alpha_ice = m_ice / (rho_ice * dx) = 0.05 / (917 * 0.0005) ≈ 0.109
-    m_ice_per_layer = 0.5 / n_layers  # kg/m² per layer
-    alpha_ice_per_layer = m_ice_per_layer / (917.0 * dx_test[0])
-    alpha_ice_test[:] = alpha_ice_per_layer
-    alpha_water_test[:] = 0.0  # No water initially
     
     begin_idx = 0
     end_idx = n_layers - 1
     
-    rho_eff = calculate_effective_density(alpha_ice_test, alpha_water_test, dx_test, 
-                                          begin_idx, end_idx)
+    # Calculate effective densities for each test case
+    case_results = {}
     
-    # Calculate total masses for display
-    m_ice_total = np.sum(alpha_ice_test * 917.0 * dx_test)
-    m_water_total = np.sum(alpha_water_test * 1000.0 * dx_test)
-    
-    print(f"\nTest Conditions:")
-    print(f"  Total ice mass: {m_ice_total:.3f} kg/m²")
-    print(f"  Total water mass: {m_water_total:.3f} kg/m²")
-    print(f"  Total frost thickness: {h_total*1000:.2f} mm")
-    print(f"  Effective density: {rho_eff:.1f} kg/m³")
-    print(f"  Water volume fraction range: 0.0 to 1.0")
-    
-    # Create results storage
-    results = {}
+    for case_key, case_info in test_cases.items():
+        print(f"\n{'='*70}")
+        print(f"Test Case: {case_info['name']} ({case_info['description']})")
+        print(f"{'='*70}")
+        
+        # Create layer arrays for this case
+        alpha_ice_test = np.zeros(n_layers)
+        alpha_water_test = np.zeros(n_layers)
+        
+        # Set alpha_ice for all layers
+        alpha_ice_test[:] = case_info['alpha_ice']
+        alpha_water_test[:] = 0.0  # No water initially
+        
+        # Calculate effective density
+        rho_eff = calculate_effective_density(alpha_ice_test, alpha_water_test, dx_test, 
+                                              begin_idx, end_idx)
+        
+        # Calculate total masses for display
+        m_ice_total = np.sum(alpha_ice_test * 917.0 * dx_test)
+        m_water_total = np.sum(alpha_water_test * 1000.0 * dx_test)
+        
+        print(f"  Total ice mass: {m_ice_total:.3f} kg/m²")
+        print(f"  Total water mass: {m_water_total:.3f} kg/m²")
+        print(f"  Total frost thickness: {h_total*1000:.2f} mm")
+        print(f"  Ice volume fraction: {case_info['alpha_ice']:.2f}")
+        print(f"  Effective density: {rho_eff:.1f} kg/m³")
+        
+        case_results[case_key] = {
+            'name': case_info['name'],
+            'alpha_ice': case_info['alpha_ice'],
+            'rho_eff': rho_eff,
+            'results': {}
+        }
     
     # Calibrated k values (from calibrate_critical_thickness.py)
     k_60 = 245.2220
@@ -296,65 +317,83 @@ if __name__ == "__main__":
     e_calibrated = 0.903741
     C_calibrated = 0.3466
     
-    for theta_deg in contact_angles:
+    # Calculate results for each test case
+    for case_key, case_data in case_results.items():
+        rho_eff = case_data['rho_eff']
         print(f"\n{'='*70}")
-        print(f"Contact Angle: θ = {theta_deg}°")
+        print(f"Calculating for {case_data['name']} (rho_eff = {rho_eff:.1f} kg/m³)")
         print(f"{'='*70}")
         
-        # Select k based on contact angle
-        if theta_deg == 60:
-            k = k_60
-        elif theta_deg == 160:
-            k = k_160
-        else:
-            # Default to average if other angle
-            k = (k_60 + k_160) / 2
-        
-        # Calculate base adhesion
-        tau_base = calculate_base_adhesion(theta_deg)
-        print(f"\nBase adhesion (τ_base): {tau_base*1000:.3f} mN/m²")
-        print(f"Calibrated k value: {k:.4f}")
-        
-        # Calculate base critical thickness (without f(alpha_water))
-        h_crit_base = calculate_critical_thickness_base(tau_base, k, rho_eff=rho_eff, g=g)
-        print(f"Base critical thickness (without f(alpha_water)): {h_crit_base*1000:.4f} mm")
-        print(f"  Formula: h_crit_base = k ⋅ τ_base / (ρ_eff ⋅ g)")
-        print(f"  = {k:.4f} ⋅ {tau_base:.6f} / ({rho_eff:.1f} ⋅ {g:.2f}) = {h_crit_base*1000:.4f} mm")
-        
-        # Calculate for different alpha_water values
-        h_crit_values = []
-        f_water_values = []
-        
-        print(f"\n{'α_water':<12} {'f(alpha_water)':<18} {'h_crit (mm)':<15} {'h_crit/f (mm)':<15}")
-        print("-" * 65)
-        
-        for alpha_water in alpha_water_values:
-            f_water = calculate_f_water(alpha_water, A_calibrated, B_calibrated, e_calibrated, C_calibrated)
-            h_crit = calculate_critical_thickness(tau_base, f_water, rho_eff, k, g)
+        for theta_deg in contact_angles:
+            print(f"\n{'='*70}")
+            print(f"Contact Angle: θ = {theta_deg}°")
+            print(f"{'='*70}")
             
-            # Calculate h_crit/f (base value without f(alpha_water))
-            h_crit_over_f = h_crit / f_water if f_water > 0 else np.inf
+            # Select k based on contact angle
+            if theta_deg == 60:
+                k = k_60
+            elif theta_deg == 160:
+                k = k_160
+            else:
+                # Default to average if other angle
+                k = (k_60 + k_160) / 2
             
-            h_crit_values.append(h_crit)
-            f_water_values.append(f_water)
+            # Calculate base adhesion
+            tau_base = calculate_base_adhesion(theta_deg)
+            print(f"\nBase adhesion (τ_base): {tau_base*1000:.3f} mN/m²")
+            print(f"Calibrated k value: {k:.4f}")
             
-            # Print every 5th value to avoid clutter
-            if len(alpha_water_values) <= 21 or np.isclose(alpha_water % 0.1, 0.0) or alpha_water == 0.0 or alpha_water == 1.0:
-                print(f"{alpha_water:<12.2f} {f_water:<18.4f} {h_crit*1000:<15.4f} {h_crit_over_f*1000:<15.4f}")
-        
-        results[theta_deg] = {
-            'alpha_water': alpha_water_values,
-            'f_water': np.array(f_water_values),
-            'h_crit': np.array(h_crit_values),
-            'tau_base': tau_base
-        }
+            # Calculate base critical thickness (without f(alpha_water))
+            h_crit_base = calculate_critical_thickness_base(tau_base, k, rho_eff=rho_eff, g=g)
+            print(f"Base critical thickness (without f(alpha_water)): {h_crit_base*1000:.4f} mm")
+            print(f"  Formula: h_crit_base = k ⋅ τ_base / (ρ_eff ⋅ g)")
+            print(f"  = {k:.4f} ⋅ {tau_base:.6f} / ({rho_eff:.1f} ⋅ {g:.2f}) = {h_crit_base*1000:.4f} mm")
+            
+            # Calculate for different alpha_water values
+            h_crit_values = []
+            f_water_values = []
+            
+            print(f"\n{'α_water':<12} {'f(alpha_water)':<18} {'h_crit (mm)':<15} {'h_crit/f (mm)':<15}")
+            print("-" * 65)
+            
+            for alpha_water in alpha_water_values:
+                f_water = calculate_f_water(alpha_water, A_calibrated, B_calibrated, e_calibrated, C_calibrated)
+                h_crit = calculate_critical_thickness(tau_base, f_water, rho_eff, k, g)
+                
+                # Calculate h_crit/f (base value without f(alpha_water))
+                h_crit_over_f = h_crit / f_water if f_water > 0 else np.inf
+                
+                h_crit_values.append(h_crit)
+                f_water_values.append(f_water)
+                
+                # Print every 5th value to avoid clutter
+                if len(alpha_water_values) <= 21 or np.isclose(alpha_water % 0.1, 0.0) or alpha_water == 0.0 or alpha_water == 1.0:
+                    print(f"{alpha_water:<12.2f} {f_water:<18.4f} {h_crit*1000:<15.4f} {h_crit_over_f*1000:<15.4f}")
+            
+            # Store results after processing all alpha_water values
+            case_data['results'][theta_deg] = {
+                'alpha_water': alpha_water_values,
+                'f_water': np.array(f_water_values),
+                'h_crit': np.array(h_crit_values),
+                'tau_base': tau_base
+            }
     
     # Create plots
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     
-    # Plot 1: f(alpha_water) vs α_water
-    axes[0, 0].plot(alpha_water_values, results[60]['f_water'], 'b-', linewidth=2, label='θ = 60°')
-    axes[0, 0].plot(alpha_water_values, results[160]['f_water'], 'r-', linewidth=2, label='θ = 160°')
+    # Colors and styles for different cases
+    case_styles = {
+        'low_density': {'color': 'blue', 'linestyle': '-', 'marker': 'o'},
+        'high_density': {'color': 'red', 'linestyle': '--', 'marker': 's'}
+    }
+    
+    # Plot 1: f(alpha_water) vs α_water (same for all cases)
+    for case_key, case_data in case_results.items():
+        style = case_styles[case_key]
+        results = case_data['results'][60]
+        axes[0, 0].plot(alpha_water_values, results['f_water'], 
+                       color=style['color'], linestyle=style['linestyle'], 
+                       linewidth=2, label=f"θ=60° ({case_data['name']})")
     axes[0, 0].set_xlabel('Water Volume Fraction (α_water)')
     axes[0, 0].set_ylabel('f(alpha_water)')
     axes[0, 0].set_title('f(alpha_water) vs Water Volume Fraction')
@@ -362,33 +401,77 @@ if __name__ == "__main__":
     axes[0, 0].legend()
     axes[0, 0].set_xlim([0, 1])
     
-    # Plot 2: h_crit vs α_water
-    axes[0, 1].plot(alpha_water_values, results[60]['h_crit']*1000, 'b-', linewidth=2, label='θ = 60°')
-    axes[0, 1].plot(alpha_water_values, results[160]['h_crit']*1000, 'r-', linewidth=2, label='θ = 160°')
+    # Plot 2: h_crit vs α_water for θ=60° (compare densities)
+    for case_key, case_data in case_results.items():
+        style = case_styles[case_key]
+        results = case_data['results'][60]
+        axes[0, 1].plot(alpha_water_values, results['h_crit']*1000, 
+                       color=style['color'], linestyle=style['linestyle'], 
+                       linewidth=2, marker=style['marker'], markersize=4,
+                       label=f"{case_data['name']} (ρ={case_data['rho_eff']:.0f} kg/m³)")
     axes[0, 1].set_xlabel('Water Volume Fraction (α_water)')
     axes[0, 1].set_ylabel('Critical Thickness (mm)')
-    axes[0, 1].set_title('Critical Detachment Thickness vs Water Volume Fraction')
+    axes[0, 1].set_title('Critical Thickness vs α_water (θ = 60°)')
     axes[0, 1].grid(True, alpha=0.3)
     axes[0, 1].legend()
     axes[0, 1].set_xlim([0, 1])
     
-    # Plot 3: Base adhesion comparison
-    tau_60 = results[60]['tau_base']
-    tau_160 = results[160]['tau_base']
+    # Plot 3: h_crit vs α_water for θ=160° (compare densities)
+    for case_key, case_data in case_results.items():
+        style = case_styles[case_key]
+        results = case_data['results'][160]
+        axes[0, 2].plot(alpha_water_values, results['h_crit']*1000, 
+                       color=style['color'], linestyle=style['linestyle'], 
+                       linewidth=2, marker=style['marker'], markersize=4,
+                       label=f"{case_data['name']} (ρ={case_data['rho_eff']:.0f} kg/m³)")
+    axes[0, 2].set_xlabel('Water Volume Fraction (α_water)')
+    axes[0, 2].set_ylabel('Critical Thickness (mm)')
+    axes[0, 2].set_title('Critical Thickness vs α_water (θ = 160°)')
+    axes[0, 2].grid(True, alpha=0.3)
+    axes[0, 2].legend()
+    axes[0, 2].set_xlim([0, 1])
+    
+    # Plot 4: Base adhesion comparison
+    tau_60 = case_results['low_density']['results'][60]['tau_base']
+    tau_160 = case_results['low_density']['results'][160]['tau_base']
     axes[1, 0].bar(['θ = 60°', 'θ = 160°'], [tau_60*1000, tau_160*1000], 
                    color=['blue', 'red'], alpha=0.7)
     axes[1, 0].set_ylabel('Base Adhesion (mN/m²)')
     axes[1, 0].set_title('Base Adhesion Comparison')
     axes[1, 0].grid(True, alpha=0.3, axis='y')
     
-    # Plot 4: h_crit ratio (160° / 60°)
-    ratio = results[160]['h_crit'] / results[60]['h_crit']
-    axes[1, 1].plot(alpha_water_values, ratio, 'g-', linewidth=2)
+    # Plot 5: h_crit ratio (160° / 60°) for different densities
+    for case_key, case_data in case_results.items():
+        style = case_styles[case_key]
+        results_60 = case_data['results'][60]
+        results_160 = case_data['results'][160]
+        ratio = results_160['h_crit'] / results_60['h_crit']
+        axes[1, 1].plot(alpha_water_values, ratio, 
+                       color=style['color'], linestyle=style['linestyle'], 
+                       linewidth=2, marker=style['marker'], markersize=4,
+                       label=case_data['name'])
     axes[1, 1].set_xlabel('Water Volume Fraction (α_water)')
     axes[1, 1].set_ylabel('h_crit(160°) / h_crit(60°)')
     axes[1, 1].set_title('Critical Thickness Ratio')
     axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].legend()
     axes[1, 1].set_xlim([0, 1])
+    
+    # Plot 6: Density comparison (h_crit ratio between densities)
+    for theta_deg in contact_angles:
+        results_low = case_results['low_density']['results'][theta_deg]
+        results_high = case_results['high_density']['results'][theta_deg]
+        ratio = results_high['h_crit'] / results_low['h_crit']
+        color = 'blue' if theta_deg == 60 else 'red'
+        axes[1, 2].plot(alpha_water_values, ratio, 
+                       color=color, linewidth=2, 
+                       label=f'θ = {theta_deg}°')
+    axes[1, 2].set_xlabel('Water Volume Fraction (α_water)')
+    axes[1, 2].set_ylabel('h_crit(Dense) / h_crit(Low Density)')
+    axes[1, 2].set_title('Density Effect on Critical Thickness')
+    axes[1, 2].grid(True, alpha=0.3)
+    axes[1, 2].legend()
+    axes[1, 2].set_xlim([0, 1])
     
     plt.tight_layout()
     plt.savefig('critical_thickness_test.png', dpi=150, bbox_inches='tight')

@@ -88,7 +88,7 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
     surface_retention_thickness = retention_result['thickness']
     
     # This ensures each layer is approximately half the retention thickness
-    n_layers = int(np.round(frost_thickness / 7e-5))
+    n_layers = int(np.round(frost_thickness / 5e-5))
     n_layers = max(1, n_layers)
     
     # Calculate dt based on method (same as main.py)
@@ -201,9 +201,11 @@ def find_threshold_thickness(porosity, time, temperature, T_ambient=12.0,
     For a given porosity:
     1. Start with start_thickness (default: 0.5 mm)
     2. Run simulation
-    3. If sloughing occurs, check if rho_eff <= 150 kg/m³ at sloughing moment
-       - If rho_eff > 150 kg/m³, treat as no sloughing (too much water) and continue
-    4. If no sloughing, increase thickness by increment (default: 0.25 mm) and try again
+    3. If sloughing occurs, check validity criteria:
+       - rho_eff <= 215 kg/m³ (if > 215, too much water - invalid)
+       - h_total > 1 mm (if <= 1 mm, too thin - invalid)
+       - Thickness increasing rate >= 0.2 mm/s (if < 0.2 mm/s, too slow - invalid)
+    4. If sloughing is invalid or no sloughing, increase thickness by increment and try again
     5. Repeat until valid sloughing occurs or max_thickness is reached
     6. When valid sloughing occurs, record the thickness at that moment
     7. That thickness becomes the threshold for this porosity
@@ -235,7 +237,7 @@ def find_threshold_thickness(porosity, time, temperature, T_ambient=12.0,
     """
     # Use explicit method (same as main.py)
     method = 'explicit'
-    dt_safety_factor = 0.5
+    dt_safety_factor = 0.9
     
     current_thickness = start_thickness
     iteration = 0
@@ -277,9 +279,14 @@ def find_threshold_thickness(porosity, time, temperature, T_ambient=12.0,
                 else:
                     h_crit_at_sloughing = result['results']['h_crit'][-1]
             
-            # If rho_eff > 150 kg/m³, treat as no sloughing (too much water)
-            if rho_eff_at_sloughing is not None and rho_eff_at_sloughing > 150:
-                print(f"      → Sloughing detected but rho_eff = {rho_eff_at_sloughing:.2f} kg/m³ > 150 kg/m³ (too much water), treating as no sloughing")
+            # Check criteria for valid sloughing:
+            # 1. Density > 215 kg/m³ (too much water - invalid)
+            # 2. Thickness > 1 mm
+            # 3. Thickness increasing rate >= 0.2 mm/s
+            
+            # Check 1: Density > 215 kg/m³
+            if rho_eff_at_sloughing is not None and rho_eff_at_sloughing > 215:
+                print(f"      → Sloughing detected but rho_eff = {rho_eff_at_sloughing:.2f} kg/m³ > 215 kg/m³ (too much water), treating as no sloughing")
                 current_thickness += increment
                 continue
             
@@ -296,17 +303,57 @@ def find_threshold_thickness(porosity, time, temperature, T_ambient=12.0,
                 else:
                     threshold = result['results']['h_total'][-1]
             
-            if threshold is not None:
-                sloughing_time = result['sloughing_time'] if result['sloughing_time'] is not None else (result['results']['time'][-1] if result['results']['time'] is not None and len(result['results']['time']) > 0 else None)
-                h_crit_str = f", h_crit = {h_crit_at_sloughing*1000:.2f} mm" if h_crit_at_sloughing is not None else ""
-                rho_eff_str = f", rho_eff = {rho_eff_at_sloughing:.2f} kg/m³" if rho_eff_at_sloughing is not None else ""
-                time_str = f"t = {sloughing_time:.1f} s" if sloughing_time is not None else "final time"
-                print(f"      ✓ Valid sloughing detected at {time_str}{h_crit_str}{rho_eff_str}")
-                print(f"      ✓ Threshold thickness: {threshold*1000:.3f} mm (thickness at sloughing)")
-                return threshold
-            else:
+            if threshold is None:
                 print(f"      Sloughing detected but h_total data not available")
                 return None
+            
+            # Check 2: Thickness > 1 mm
+            if threshold <= 0.001:  # 1 mm = 0.001 m
+                print(f"      → Sloughing detected but h_total = {threshold*1000:.3f} mm <= 1 mm, treating as no sloughing")
+                current_thickness += increment
+                continue
+            
+            # Check 3: Thickness increasing rate >= 0.2 mm/s
+            # Calculate rate of change from history
+            thickness_rate = None
+            if result['results']['h_total'] is not None and result['results']['time'] is not None:
+                h_total = np.array(result['results']['h_total'])
+                time_array = np.array(result['results']['time'])
+                
+                # Need at least 2 points to calculate rate
+                if len(h_total) >= 2 and len(time_array) >= 2:
+                    # Find the index at or just before sloughing
+                    if len(sloughing_indices) > 0:
+                        idx = sloughing_indices[0]
+                    else:
+                        idx = len(h_total) - 1
+                    
+                    # Use a window before sloughing to calculate rate
+                    # Use last 5 points or all available if fewer
+                    window_size = min(5, idx + 1)
+                    if window_size >= 2:
+                        h_window = h_total[idx - window_size + 1:idx + 1]
+                        t_window = time_array[idx - window_size + 1:idx + 1]
+                        
+                        # Calculate average rate over the window
+                        if len(t_window) > 1 and (t_window[-1] - t_window[0]) > 0:
+                            thickness_rate = (h_window[-1] - h_window[0]) / (t_window[-1] - t_window[0])
+            
+            # Check if rate is sufficient (>= 0.2 mm/s = 0.0002 m/s)
+            if thickness_rate is not None and thickness_rate < 0.0002:  # 0.2 mm/s = 0.0002 m/s
+                print(f"      → Sloughing detected but thickness rate = {thickness_rate*1000:.3f} mm/s < 0.2 mm/s, treating as no sloughing")
+                current_thickness += increment
+                continue
+            
+            # All criteria met - valid sloughing
+            sloughing_time = result['sloughing_time'] if result['sloughing_time'] is not None else (result['results']['time'][-1] if result['results']['time'] is not None and len(result['results']['time']) > 0 else None)
+            h_crit_str = f", h_crit = {h_crit_at_sloughing*1000:.2f} mm" if h_crit_at_sloughing is not None else ""
+            rho_eff_str = f", rho_eff = {rho_eff_at_sloughing:.2f} kg/m³" if rho_eff_at_sloughing is not None else ""
+            rate_str = f", rate = {thickness_rate*1000:.3f} mm/s" if thickness_rate is not None else ""
+            time_str = f"t = {sloughing_time:.1f} s" if sloughing_time is not None else "final time"
+            print(f"      ✓ Valid sloughing detected at {time_str}{h_crit_str}{rho_eff_str}{rate_str}")
+            print(f"      ✓ Threshold thickness: {threshold*1000:.3f} mm (thickness at sloughing)")
+            return threshold
         elif result['completely_melted']:
             print(f"      → Frost completely melted (no sloughing), increasing thickness...")
             # Increase thickness and try again
@@ -359,7 +406,7 @@ def plot_threshold_curve(data_file='exp_data/defrost_sloughing_experiment_data.c
     print("\nFinding threshold thickness for each porosity...")
     T_ambient = 12.0  # 12°C ambient condition
     start_thickness = 0.0005  # 0.5 mm starting thickness
-    increment = 0.00025  # 0.25 mm increment
+    increment = 0.0001  # 0.25 mm increment
     max_thickness = 0.01  # 10 mm maximum thickness
     
     threshold_thicknesses = []

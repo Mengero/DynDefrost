@@ -400,6 +400,11 @@ class DefrostSolver:
         if sloughing_info['sloughing']:
             # Calculate water retention from the layer closest to the wall (first layer)
             if self.model.n_layers > 0:
+                # Calculate effective density BEFORE modifying layers (at moment of sloughing)
+                rho_eff = self._calculate_effective_density()
+                # Store rho_eff in sloughing info for access by other modules
+                self._latest_sloughing_info['rho_eff'] = rho_eff
+                
                 # Water mass per unit area in the first layer
                 water_retention = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
                 self.model.surface_retention = water_retention  # [kg/m²]
@@ -432,6 +437,7 @@ class DefrostSolver:
                 print(f"  h_total = {sloughing_info['h_total']*1000:.4f} mm")
                 print(f"  h_crit = {sloughing_info['h_crit']*1000:.4f} mm")
                 print(f"  Safety factor = {sloughing_info['safety_factor']:.4f}")
+                print(f"  Effective density = {rho_eff:.2f} kg/m³")
                 print(f"  Surface water retention = {water_retention*1000:.2f} g/m²")
                 print(f"  Surface water retention thickness = {self.model.surface_retention_thickness*1000:.4f} mm")
                 print(f"  Layer 0: alpha_water = {self.model.alpha_water[0]:.3f}, thickness = {self.model.dx[0]*1000:.4f} mm")
@@ -2099,16 +2105,16 @@ class DefrostSolver:
             self._latest_sloughing_info = None
         
         # Time stepping
-        last_print_time = time_array[0] - 1.0  # Initialize to allow first print
-        last_progress_bar_time = time_array[0]  # Track last progress bar update
-        print_interval = 1.0  # Print progress every 1 second
-        progress_bar_interval = 0.1  # Update progress bar every 0.1 seconds
         total_duration = time_array[-1] - time_array[0]
         
-        # Print header for progress output
-        print(f"\nTime marching progress:")
-        print(f"  {'Time':<20} {'Surface Temp':<15} {'Total Thickness':<18} {'Critical Thickness':<20} {'Effective Density':<20}")
-        print(f"  {'-'*20} {'-'*15} {'-'*18} {'-'*20} {'-'*20}")
+        # Rotating spinner for progress indication
+        spinner_chars = ['|', '/', '-', '\\']
+        spinner_idx = 0
+        last_spinner_update = time_array[0]
+        spinner_interval = 0.5  # Update spinner every 0.5 seconds of simulation time
+        
+        # Print initial message
+        print(f"\nSimulating... ", end='', flush=True)
         
         for i in range(1, n_steps):
             dt = time_array[i] - time_array[i-1]
@@ -2123,88 +2129,21 @@ class DefrostSolver:
             
             # Check if all layers have become water (simulation should end)
             if hasattr(self, '_all_layers_water') and self._all_layers_water:
-                print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s - all layers have become water")
+                print(f"\r                                                              ", end='')
+                print(f"\rSimulation stopped at t = {time_array[i]:.2f} s - all layers have become water")
                 break
             
-            # Check if we should print detailed status
-            time_since_last_print = current_time - last_print_time
-            should_print_detailed = (time_since_last_print >= print_interval or i == 1 or i == n_steps - 1)
-            
-            # Update progress bar (more frequently, but not when printing detailed status)
-            time_since_last_progress = current_time - last_progress_bar_time
-            if time_since_last_progress >= progress_bar_interval and not should_print_detailed:
+            # Update rotating spinner
+            time_since_last_spinner = current_time - last_spinner_update
+            if time_since_last_spinner >= spinner_interval:
                 # Calculate progress percentage
                 elapsed_time = current_time - time_array[0]
                 progress_pct = min(100.0, (elapsed_time / total_duration) * 100.0) if total_duration > 0 else 0.0
                 
-                # Create progress bar (30 characters wide)
-                bar_width = 30
-                filled = int(bar_width * progress_pct / 100.0)
-                bar = '=' * filled + '>' + ' ' * (bar_width - filled - 1)
-                
-                # Calculate current total thickness for progress bar
-                h_total = np.sum(self.model.dx)
-                
-                # Get critical thickness from latest sloughing info
-                if hasattr(self, '_latest_sloughing_info') and self._latest_sloughing_info is not None:
-                    h_crit = self._latest_sloughing_info.get('h_crit', np.inf)
-                else:
-                    sloughing_info = self._check_sloughing()
-                    h_crit = sloughing_info.get('h_crit', np.inf)
-                
-                # Format critical thickness (use 'inf' if infinite)
-                if h_crit < np.inf:
-                    h_crit_str = f"{h_crit*1000:7.4f} mm"
-                else:
-                    h_crit_str = "    inf mm"
-                
-                # Calculate effective density
-                rho_eff = self._calculate_effective_density()
-                rho_eff_str = f"{rho_eff:7.2f} kg/m³" if rho_eff > 0 else "   0.00 kg/m³"
-                
-                # Print progress bar on same line (overwrite)
-                print(f"\r  [{bar}] {progress_pct:5.1f}% | "
-                      f"t = {current_time:7.1f} s | "
-                      f"T = {T_surface:6.2f}°C | "
-                      f"h = {h_total*1000:7.4f} mm | "
-                      f"h_crit = {h_crit_str} | "
-                      f"ρ_eff = {rho_eff_str}", end='', flush=True)
-                last_progress_bar_time = current_time
-            
-            # Print detailed progress information (less frequently)
-            if should_print_detailed:
-                # Clear the progress bar line first
-                print('\r' + ' ' * 100 + '\r', end='', flush=True)
-                
-                # Calculate current total thickness
-                h_total = np.sum(self.model.dx)
-                
-                # Get critical thickness from latest sloughing info
-                if hasattr(self, '_latest_sloughing_info') and self._latest_sloughing_info is not None:
-                    h_crit = self._latest_sloughing_info.get('h_crit', np.inf)
-                else:
-                    sloughing_info = self._check_sloughing()
-                    h_crit = sloughing_info.get('h_crit', np.inf)
-                
-                # Format critical thickness (use 'inf' if infinite)
-                if h_crit < np.inf:
-                    h_crit_str = f"{h_crit*1000:7.4f} mm"
-                else:
-                    h_crit_str = "    inf mm"
-                
-                # Calculate effective density
-                rho_eff = self._calculate_effective_density()
-                rho_eff_str = f"{rho_eff:7.2f} kg/m³" if rho_eff > 0 else "   0.00 kg/m³"
-                
-                # Print detailed progress
-                time_min = current_time / 60.0
-                print(f"  {current_time:7.1f} s ({time_min:6.2f} min) | "
-                      f"{T_surface:6.2f}°C        | "
-                      f"{h_total*1000:7.4f} mm | "
-                      f"{h_crit_str} | "
-                      f"{rho_eff_str}", flush=True)
-                last_print_time = current_time
-                last_progress_bar_time = current_time  # Reset progress bar timer
+                # Print rotating spinner with progress
+                print(f"\rSimulating... {spinner_chars[spinner_idx]} {progress_pct:5.1f}% (t = {current_time:.1f} s)", end='', flush=True)
+                spinner_idx = (spinner_idx + 1) % len(spinner_chars)
+                last_spinner_update = current_time
             
             # Determine if we should save history at this time step
             should_save_history = False
@@ -2251,11 +2190,17 @@ class DefrostSolver:
                     sloughing_occurred = self.sloughing_status_history[-1]
                 
                 if sloughing_occurred:
-                    # Sloughing occurred - stop simulation
-                    print(f"Simulation stopped at step {i}, time = {time_array[i]:.2f} s due to sloughing")
+                    # Sloughing occurred - stop simulation (clear spinner line first)
+                    print(f"\r                                                              ", end='')
+                    print(f"\rSimulation stopped at t = {time_array[i]:.2f} s due to sloughing")
                     break
                 else:
-                    print(f"Warning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
+                    print(f"\r                                                              ", end='')
+                    print(f"\rWarning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
+        else:
+            # Loop completed without break - clear spinner and show completion
+            print(f"\r                                                              ", end='')
+            print(f"\rSimulation completed: t = {time_array[-1]:.2f} s")
         
         # Extract volume fractions from history
         alpha_ice_array = None

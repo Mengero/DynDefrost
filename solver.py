@@ -1905,7 +1905,7 @@ class DefrostSolver:
         
         # Calculate critical thickness
         if rho_eff > 0 and self.g > 0:
-            h_crit = (k * tau_base * f_water) / (rho_eff * self.g) - 0.0003
+            h_crit = (k * tau_base * f_water) / (rho_eff * self.g) + 0.0005
         else:
             h_crit = np.inf  # Invalid case
         
@@ -2190,6 +2190,31 @@ class DefrostSolver:
                     sloughing_occurred = self.sloughing_status_history[-1]
                 
                 if sloughing_occurred:
+                    # Sloughing occurred - ensure last time step is saved to history
+                    # Save even if it doesn't meet the interval condition
+                    if save_history and not should_save_history:
+                        # Last step wasn't saved yet, save it now
+                        self.time_history.append(time_array[i])
+                        self.temperature_history.append(self.model.T.copy())
+                        self.enthalpy_history.append(self.h.copy())
+                        self.volume_fraction_history.append({
+                            'ice': self.model.alpha_ice.copy(),
+                            'water': self.model.alpha_water.copy(),
+                            'air': self.model.alpha_air.copy()
+                        })
+                        self.dx_history.append(self.model.dx.copy())
+                        if self.current_shrinkage_rates is not None:
+                            self.shrinkage_rate_history.append(self.current_shrinkage_rates.copy())
+                        else:
+                            self.shrinkage_rate_history.append(np.zeros(self.model.n_layers))
+                        
+                        # Save sloughing info for this final step
+                        if hasattr(self, '_latest_sloughing_info'):
+                            sloughing_info = self._latest_sloughing_info
+                            self.h_crit_history.append(sloughing_info['h_crit'])
+                            self.h_total_history.append(sloughing_info['h_total'])
+                            self.sloughing_status_history.append(sloughing_info['sloughing'])
+                    
                     # Sloughing occurred - stop simulation (clear spinner line first)
                     print(f"\r                                                              ", end='')
                     print(f"\rSimulation stopped at t = {time_array[i]:.2f} s due to sloughing")
@@ -2198,6 +2223,33 @@ class DefrostSolver:
                     print(f"\r                                                              ", end='')
                     print(f"\rWarning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
         else:
+            # Loop completed without break - ensure last time step is saved
+            if save_history:
+                # Check if last step was already saved
+                last_saved_time = self.time_history[-1] if len(self.time_history) > 0 else None
+                if last_saved_time is None or abs(last_saved_time - time_array[-1]) > 1e-6:
+                    # Last step wasn't saved, save it now
+                    self.time_history.append(time_array[-1])
+                    self.temperature_history.append(self.model.T.copy())
+                    self.enthalpy_history.append(self.h.copy())
+                    self.volume_fraction_history.append({
+                        'ice': self.model.alpha_ice.copy(),
+                        'water': self.model.alpha_water.copy(),
+                        'air': self.model.alpha_air.copy()
+                    })
+                    self.dx_history.append(self.model.dx.copy())
+                    if self.current_shrinkage_rates is not None:
+                        self.shrinkage_rate_history.append(self.current_shrinkage_rates.copy())
+                    else:
+                        self.shrinkage_rate_history.append(np.zeros(self.model.n_layers))
+                    
+                    # Save sloughing info for final step
+                    if hasattr(self, '_latest_sloughing_info'):
+                        sloughing_info = self._latest_sloughing_info
+                        self.h_crit_history.append(sloughing_info['h_crit'])
+                        self.h_total_history.append(sloughing_info['h_total'])
+                        self.sloughing_status_history.append(sloughing_info['sloughing'])
+            
             # Loop completed without break - clear spinner and show completion
             print(f"\r                                                              ", end='')
             print(f"\rSimulation completed: t = {time_array[-1]:.2f} s")

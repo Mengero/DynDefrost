@@ -24,12 +24,12 @@ figure_dir.mkdir(exist_ok=True)
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "180min_60deg_55%_22C.txt"
+    data_file = "90min_60deg_45%_22C.txt"
     # n_layers will be automatically calculated based on initial thickness and retention thickness
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed
     method = 'explicit'  # Solver method: 'explicit' or 'implicit'
-    dt_safety_factor = 0.8
+    dt_safety_factor = 0.9
     # ===========================
     
     # Load data
@@ -104,7 +104,7 @@ def main():
         
         # Calculate number of layers: n_layers = initial_thickness / (retention_thickness / 2)
         # This ensures each layer is approximately half the retention thickness
-        n_layers = int(np.round(frost_thickness / 3e-5))
+        n_layers = int(np.round(frost_thickness / 5e-5))
         
         # Ensure minimum of 1 layer
         n_layers = max(1, n_layers)
@@ -164,7 +164,7 @@ def main():
     )
     
     # Create solver with convective heat transfer coefficient and ambient temperature
-    h_conv = 4.0  # Natural convection heat transfer coefficient [W/(m²·K)]
+    h_conv = 1.5  # Natural convection heat transfer coefficient [W/(m²·K)]
     solver = DefrostSolver(model, dt=dt, method=method, h_conv=h_conv, T_ambient=T_ambient)
     
     if T_ambient is not None:
@@ -499,6 +499,110 @@ def main():
         plt.close()
     else:
         print("Warning: No shrinkage rate data available for plotting")
+    
+    # Plot effective density vs time
+    if (results['alpha_ice'] is not None and results['alpha_water'] is not None and 
+        results['dx'] is not None and len(results['alpha_ice']) > 0):
+        alpha_ice_array = np.array(results['alpha_ice'])  # Shape: (n_time_steps, n_layers)
+        alpha_water_array = np.array(results['alpha_water'])  # Shape: (n_time_steps, n_layers)
+        dx_array = np.array(results['dx'])  # Shape: (n_time_steps, n_layers)
+        time_plot = results['time']
+        
+        # Ensure arrays have the same length
+        min_len = min(len(time_plot), alpha_ice_array.shape[0], 
+                     alpha_water_array.shape[0], dx_array.shape[0])
+        time_plot = time_plot[:min_len]
+        alpha_ice_plot = alpha_ice_array[:min_len, :]
+        alpha_water_plot = alpha_water_array[:min_len, :]
+        dx_plot = dx_array[:min_len, :]
+        
+        # Calculate effective density for each time step
+        # Use the same method as solver._calculate_effective_density()
+        rho_ice = 917.0  # kg/m³
+        rho_water = 1000.0  # kg/m³
+        rho_air = 1.2  # kg/m³
+        
+        rho_eff_history = []
+        n_layers = alpha_ice_plot.shape[1]
+        
+        # Get begin_idx and end_idx from model (if available)
+        # For now, assume all layers are active (begin_idx=0, end_idx=n_layers-1)
+        begin_idx = 0
+        end_idx = n_layers - 1
+        
+        for t_idx in range(min_len):
+            alpha_ice_t = alpha_ice_plot[t_idx, :]
+            alpha_water_t = alpha_water_plot[t_idx, :]
+            dx_t = dx_plot[t_idx, :]
+            
+            # Find the first layer with frost (alpha_ice > 0) starting from wall side (end_idx)
+            first_frost_idx = None
+            for i in range(end_idx, begin_idx - 1, -1):
+                if alpha_ice_t[i] > 1e-10:  # Layer contains ice
+                    first_frost_idx = i
+                    break
+            
+            if first_frost_idx is None:
+                rho_eff_history.append(0.0)
+                continue
+            
+            # Calculate masses and thickness from first_frost_idx to end_idx (inclusive)
+            layer_range = range(first_frost_idx, end_idx + 1)
+            
+            # Calculate masses per unit area
+            m_ice_layers = alpha_ice_t[layer_range] * rho_ice * dx_t[layer_range]
+            m_water_layers = alpha_water_t[layer_range] * rho_water * dx_t[layer_range]
+            
+            m_ice_total = np.sum(m_ice_layers)
+            m_water_total = np.sum(m_water_layers)
+            
+            # Total thickness
+            h_total = np.sum(dx_t[layer_range])
+            
+            if h_total > 0:
+                # Calculate volumes
+                V_total = h_total  # For unit area A = 1 m²
+                V_ice = m_ice_total / rho_ice
+                V_water = m_water_total / rho_water
+                V_air = V_total - V_ice - V_water
+                V_air = np.maximum(V_air, 0.0)  # Ensure non-negative
+                
+                # Calculate air mass
+                m_air_total = V_air * rho_air
+                
+                # Total mass
+                # m_total = m_ice_total + m_water_total + m_air_total
+                m_total = m_ice_total + m_air_total
+                
+                # Effective density
+                rho_eff = m_total / h_total
+            else:
+                rho_eff = 0.0
+            
+            rho_eff_history.append(rho_eff)
+        
+        rho_eff_array = np.array(rho_eff_history)
+        
+        # Plot effective density vs time
+        plt.figure(figsize=(10, 6))
+        plt.plot(time_plot, rho_eff_array, 'g-', linewidth=2, label='Effective density')
+        plt.xlabel('Time [s]', fontsize=12)
+        plt.ylabel('Effective Density [kg/m³]', fontsize=12)
+        plt.title('Effective Density vs Time', fontsize=14, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend(fontsize=11)
+        
+        # Add horizontal line at 215 kg/m³ (threshold for too much water)
+        plt.axhline(y=215, color='r', linestyle='--', linewidth=1.5, alpha=0.7, 
+                   label='Water threshold (215 kg/m³)')
+        
+        plt.tight_layout()
+        figure_path = figure_dir / f'{figure_prefix}_effective_density_vs_time.png'
+        plt.savefig(figure_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to '{figure_path}'")
+        plt.close()
+    else:
+        print("Warning: No data available for effective density plot")
     
     return time, temperature, frost_props, model, results
 

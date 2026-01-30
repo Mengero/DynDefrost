@@ -61,6 +61,8 @@ class DefrostSolver:
         # These are specific enthalpies [J/kg] for the MIXTURE, not pure ice
         self.L_f = None  # Will be calculated per layer
         self.L_H2O = None  # Will be calculated per layer
+        # Reference temperature per layer [K] (initial state where h = 0); used when recalculating L_f, L_H2O
+        self.T_ref_K = None
         
         # Calculate enthalpy thresholds for each layer
         self._calculate_enthalpy_thresholds()
@@ -205,7 +207,9 @@ class DefrostSolver:
         self.L_H2O = np.zeros(n)
         
         # Reference temperature: use initial temperature as reference (h = 0 at initial state)
-        T_ref_K = self.model.T + 273.15  # Convert initial T from °C to K [K]
+        # Store per layer for later recalculation when mass enters a layer (e.g. water diffusion)
+        self.T_ref_K = (self.model.T + 273.15).copy()  # [K]
+        T_ref_K = self.T_ref_K
         
         # Melting temperature in Kelvin
         T_melt_K = self.model.T_melt + 273.15  # [K]
@@ -266,6 +270,51 @@ class DefrostSolver:
         print(f"Enthalpy thresholds calculated:")
         print(f"  L_f range: [{np.min(self.L_f):.2f}, {np.max(self.L_f):.2f}] J/kg")
         print(f"  L_H2O range: [{np.min(self.L_H2O):.2f}, {np.max(self.L_H2O):.2f}] J/kg")
+    
+    def _recalculate_layer_enthalpy_thresholds(self, layer_idx, alpha_ice_eff, alpha_air_eff):
+        """
+        Recalculate L_f and L_H2O for a single layer given effective initial composition.
+        Used when mass (e.g. melted water) has entered the control volume, so the effective
+        "initial" ice content (if we think of the added water as having been ice) is larger.
+        
+        Parameters
+        ----------
+        layer_idx : int
+            Layer index
+        alpha_ice_eff : float
+            Effective initial ice volume fraction (ice + water-as-ice equivalent)
+        alpha_air_eff : float
+            Effective initial air volume fraction (1 - alpha_ice_eff for no water)
+        """
+        T_melt_K = self.model.T_melt + 273.15
+        T_ref_K_i = self.T_ref_K[layer_idx]
+        
+        # L_f: mixture enthalpy at melting point (ice + air, no water)
+        h_at_melt = self._calculate_mixture_enthalpy(
+            T_K=T_melt_K,
+            T_ref_K=T_ref_K_i,
+            alpha_ice=alpha_ice_eff,
+            alpha_water=0.0,
+            alpha_air=alpha_air_eff
+        )
+        self.L_f[layer_idx] = h_at_melt
+        
+        # L_H2O: mixture enthalpy when all ice has melted
+        alpha_water_melted = alpha_ice_eff * self.model.rho_ice / self.model.rho_water
+        h_all_melted = self._calculate_mixture_enthalpy(
+            T_K=T_melt_K,
+            T_ref_K=T_ref_K_i,
+            alpha_ice=0.0,
+            alpha_water=alpha_water_melted,
+            alpha_air=alpha_air_eff
+        )
+        rho_A = (alpha_ice_eff * self.model.rho_ice + alpha_air_eff * self.model.rho_air)
+        if rho_A > 0:
+            mass_fraction_ice = (alpha_ice_eff * self.model.rho_ice) / rho_A
+            latent_heat_per_mass_mixture = mass_fraction_ice * self.model.L_fusion
+        else:
+            latent_heat_per_mass_mixture = 0.0
+        self.L_H2O[layer_idx] = h_all_melted + latent_heat_per_mass_mixture
     
     def _initialize_enthalpy(self):
         """
@@ -1154,7 +1203,19 @@ class DefrostSolver:
         h_current = self.h[layer_idx]
         h_new = (h_current * current_total_mass + water_enthalpy_that_fits) / new_total_mass
         
-        # Get mushy zone thresholds
+        # Recalculate mushy zone thresholds for this layer: more mass has entered (melted water),
+        # so the effective "initial" ice content (ice + water-as-ice equivalent) is larger.
+        # L_f and L_H2O depend on alpha_ice; both must be updated before the mushy zone check.
+        if dx > 0 and self.model.rho_ice > 0:
+            # Effective initial state: all (ice + water) in the control volume as ice + air
+            ice_plus_water_mass = ice_mass + total_water_mass
+            alpha_ice_eff = min(1.0, ice_plus_water_mass / (self.model.rho_ice * dx))
+            alpha_air_eff = 1.0 - alpha_ice_eff
+            if alpha_air_eff < 0:
+                alpha_air_eff = 0.0
+            self._recalculate_layer_enthalpy_thresholds(layer_idx, alpha_ice_eff, alpha_air_eff)
+        
+        # Get mushy zone thresholds (now updated for current layer composition)
         L_f_i = self.L_f[layer_idx]
         L_H2O_i = self.L_H2O[layer_idx]
         

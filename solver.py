@@ -23,10 +23,10 @@ class DefrostSolver:
     Uses fully implicit (backward Euler) method for stability with large gradients.
     """
     
-    def __init__(self, model, dt=0.1, method='explicit', h_conv=10.0, T_ambient=None):
+    def __init__(self, model, dt=0.1, method='explicit', h_conv=10.0, T_ambient=None, verbose=True):
         """
         Initialize the defrost solver.
-        
+
         Parameters
         ----------
         model : DefrostModel
@@ -41,12 +41,15 @@ class DefrostSolver:
         T_ambient : float, optional
             Ambient air temperature [°C]. If None, will use model.T_ambient if set.
             Default: None
+        verbose : bool, optional
+            If True, print progress messages during simulation. Default: True
         """
         self.model = model
         self.dt = dt
         self.method = method.lower()
         self.h_conv = h_conv if h_conv is not None else 5.0  # Convective heat transfer coefficient [W/(m²·K)]
         self.T_ambient = T_ambient if T_ambient is not None else model.T_ambient
+        self.verbose = verbose
         
         if self.method not in ['explicit', 'implicit']:
             raise ValueError(f"Method must be 'explicit' or 'implicit', got '{method}'")
@@ -90,7 +93,7 @@ class DefrostSolver:
         
         # Shrinkage model parameters
         self.sigma = 72e-3  # Surface tension [N/m] (water-air at 0°C)
-        self.eta_0 = 2e4  # Base viscosity [Pa·s]
+        self.eta_0 = 6e4  # Base viscosity [Pa·s]
         self.b = 3.0  # Structural constant (typically 2-4)
         self.C_wet = 700  # Lubricant constant
         self.d_ice_initial = 5e-4  # Initial ice grain diameter [m] (10 microns, typical)
@@ -266,10 +269,11 @@ class DefrostSolver:
             
             # L_H2O = enthalpy of water+air at T_melt + latent heat
             self.L_H2O[i] = h_all_melted + latent_heat_per_mass_mixture
-        
-        print(f"Enthalpy thresholds calculated:")
-        print(f"  L_f range: [{np.min(self.L_f):.2f}, {np.max(self.L_f):.2f}] J/kg")
-        print(f"  L_H2O range: [{np.min(self.L_H2O):.2f}, {np.max(self.L_H2O):.2f}] J/kg")
+
+        if self.verbose:
+            print(f"Enthalpy thresholds calculated:")
+            print(f"  L_f range: [{np.min(self.L_f):.2f}, {np.max(self.L_f):.2f}] J/kg")
+            print(f"  L_H2O range: [{np.min(self.L_H2O):.2f}, {np.max(self.L_H2O):.2f}] J/kg")
     
     def _recalculate_layer_enthalpy_thresholds(self, layer_idx, alpha_ice_eff, alpha_air_eff):
         """
@@ -479,19 +483,20 @@ class DefrostSolver:
                 # Update masses for first layer
                 self.m_double_prime_ice[0] = 0.0
                 self.m_double_prime_water[0] = self.model.alpha_water[0] * self.model.rho_water * self.model.dx[0]
-                
-                print(f"\n{'='*70}")
-                print("SLOUGHING DETECTED!")
-                print(f"{'='*70}")
-                print(f"  h_total = {sloughing_info['h_total']*1000:.4f} mm")
-                print(f"  h_crit = {sloughing_info['h_crit']*1000:.4f} mm")
-                print(f"  Safety factor = {sloughing_info['safety_factor']:.4f}")
-                print(f"  Effective density = {rho_eff:.2f} kg/m³")
-                print(f"  Surface water retention = {water_retention*1000:.2f} g/m²")
-                print(f"  Surface water retention thickness = {self.model.surface_retention_thickness*1000:.4f} mm")
-                print(f"  Layer 0: alpha_water = {self.model.alpha_water[0]:.3f}, thickness = {self.model.dx[0]*1000:.4f} mm")
-                print(f"  All other layers set to zero")
-                print(f"{'='*70}\n")
+
+                if self.verbose:
+                    print(f"\n{'='*70}")
+                    print("SLOUGHING DETECTED!")
+                    print(f"{'='*70}")
+                    print(f"  h_total = {sloughing_info['h_total']*1000:.4f} mm")
+                    print(f"  h_crit = {sloughing_info['h_crit']*1000:.4f} mm")
+                    print(f"  Safety factor = {sloughing_info['safety_factor']:.4f}")
+                    print(f"  Effective density = {rho_eff:.2f} kg/m³")
+                    print(f"  Surface water retention = {water_retention*1000:.2f} g/m²")
+                    print(f"  Surface water retention thickness = {self.model.surface_retention_thickness*1000:.4f} mm")
+                    print(f"  Layer 0: alpha_water = {self.model.alpha_water[0]:.3f}, thickness = {self.model.dx[0]*1000:.4f} mm")
+                    print(f"  All other layers set to zero")
+                    print(f"{'='*70}\n")
             
             # Return False to indicate simulation should stop
             return False
@@ -2114,17 +2119,18 @@ class DefrostSolver:
             self.model.surface_retention = retention_result['retention']
             self.model.surface_retention_thickness = retention_result['thickness']
             self.model.surface_type_classification = retention_result['surface_type']
-            
-            print(f"\n{'='*70}")
-            print("Surface Retention Maximum (before time marching):")
-            print(f"{'='*70}")
-            print(f"  Contact angles: θ_R={self.model.theta_receding:.1f}°, θ_A={self.model.theta_advancing:.1f}°")
-            print(f"  Surface type: {retention_result['surface_type']}")
-            print(f"  Maximum retention: {retention_result['retention']*1000:.2f} g/m²")
-            print(f"  Maximum retention thickness: {retention_result['thickness']*1000:.4f} mm")
-            print(f"  Retention coefficient (k): {retention_result['k']:.4f}")
-            print(f"  Droplet spacing (δ): {retention_result['delta']*1e6:.2f} μm")
-            print(f"{'='*70}\n")
+
+            if self.verbose:
+                print(f"\n{'='*70}")
+                print("Surface Retention Maximum (before time marching):")
+                print(f"{'='*70}")
+                print(f"  Contact angles: θ_R={self.model.theta_receding:.1f}°, θ_A={self.model.theta_advancing:.1f}°")
+                print(f"  Surface type: {retention_result['surface_type']}")
+                print(f"  Maximum retention: {retention_result['retention']*1000:.2f} g/m²")
+                print(f"  Maximum retention thickness: {retention_result['thickness']*1000:.4f} mm")
+                print(f"  Retention coefficient (k): {retention_result['k']:.4f}")
+                print(f"  Droplet spacing (δ): {retention_result['delta']*1e6:.2f} μm")
+                print(f"{'='*70}\n")
         
         # Initialize history and sloughing info storage
         if save_history:
@@ -2175,7 +2181,8 @@ class DefrostSolver:
         spinner_interval = 0.5  # Update spinner every 0.5 seconds of simulation time
         
         # Print initial message
-        print(f"\nSimulating... ", end='', flush=True)
+        if self.verbose:
+            print(f"\nSimulating... ", end='', flush=True)
         
         for i in range(1, n_steps):
             dt = time_array[i] - time_array[i-1]
@@ -2190,8 +2197,9 @@ class DefrostSolver:
             
             # Check if all layers have become water (simulation should end)
             if hasattr(self, '_all_layers_water') and self._all_layers_water:
-                print(f"\r                                                              ", end='')
-                print(f"\rSimulation stopped at t = {time_array[i]:.2f} s - all layers have become water")
+                if self.verbose:
+                    print(f"\r                                                              ", end='')
+                    print(f"\rSimulation stopped at t = {time_array[i]:.2f} s - all layers have become water")
                 break
             
             # Update rotating spinner
@@ -2200,9 +2208,10 @@ class DefrostSolver:
                 # Calculate progress percentage
                 elapsed_time = current_time - time_array[0]
                 progress_pct = min(100.0, (elapsed_time / total_duration) * 100.0) if total_duration > 0 else 0.0
-                
+
                 # Print rotating spinner with progress
-                print(f"\rSimulating... {spinner_chars[spinner_idx]} {progress_pct:5.1f}% (t = {current_time:.1f} s)", end='', flush=True)
+                if self.verbose:
+                    print(f"\rSimulating... {spinner_chars[spinner_idx]} {progress_pct:5.1f}% (t = {current_time:.1f} s)", end='', flush=True)
                 spinner_idx = (spinner_idx + 1) % len(spinner_chars)
                 last_spinner_update = current_time
             
@@ -2277,12 +2286,14 @@ class DefrostSolver:
                             self.sloughing_status_history.append(sloughing_info['sloughing'])
                     
                     # Sloughing occurred - stop simulation (clear spinner line first)
-                    print(f"\r                                                              ", end='')
-                    print(f"\rSimulation stopped at t = {time_array[i]:.2f} s due to sloughing")
+                    if self.verbose:
+                        print(f"\r                                                              ", end='')
+                        print(f"\rSimulation stopped at t = {time_array[i]:.2f} s due to sloughing")
                     break
                 else:
-                    print(f"\r                                                              ", end='')
-                    print(f"\rWarning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
+                    if self.verbose:
+                        print(f"\r                                                              ", end='')
+                        print(f"\rWarning: Solver failed at step {i}, time = {time_array[i]:.2f} s")
         else:
             # Loop completed without break - ensure last time step is saved
             if save_history:
@@ -2312,8 +2323,9 @@ class DefrostSolver:
                         self.sloughing_status_history.append(sloughing_info['sloughing'])
             
             # Loop completed without break - clear spinner and show completion
-            print(f"\r                                                              ", end='')
-            print(f"\rSimulation completed: t = {time_array[-1]:.2f} s")
+            if self.verbose:
+                print(f"\r                                                              ", end='')
+                print(f"\rSimulation completed: t = {time_array[-1]:.2f} s")
         
         # Extract volume fractions from history
         alpha_ice_array = None

@@ -114,20 +114,23 @@ class FrostPropertiesLoader:
 
 class DefrostDataLoader:
     """Loads and processes defrost experimental data."""
-    
-    def __init__(self, filepath: str):
+
+    def __init__(self, filepath: str, verbose: bool = True):
         """
         Initialize the data loader with a file path.
-        
+
         Parameters
         ----------
         filepath : str
             Path to the experimental data file (.txt)
+        verbose : bool, optional
+            If True, print loading messages. Default: True
         """
         self.filepath = Path(filepath)
+        self.verbose = verbose
         self.time = None
         self.temperature = None
-        
+
         # Frost properties from summary file
         self.porosity = None
         self.thickness = None
@@ -186,11 +189,12 @@ class DefrostDataLoader:
         # Convert to numpy arrays
         self.time = np.array(time_seconds)
         self.temperature = np.array(temperature)
-        
-        print(f"Loaded {len(self.time)} data points from: {self.filepath.name}")
-        print(f"  Duration: {self.time[-1]:.1f} s")
-        print(f"  Temperature range: {self.temperature[0]:.1f}°C to {self.temperature[-1]:.1f}°C")
-        
+
+        if self.verbose:
+            print(f"Loaded {len(self.time)} data points from: {self.filepath.name}")
+            print(f"  Duration: {self.time[-1]:.1f} s")
+            print(f"  Temperature range: {self.temperature[0]:.1f}°C to {self.temperature[-1]:.1f}°C")
+
         return self.time, self.temperature
     
     def get_summary(self):
@@ -364,16 +368,18 @@ def get_default_data_path():
     return data_dir / "55min_60deg_83%_12C.txt"
 
 
-def load_defrost_data(filepath: str = None):
+def load_defrost_data(filepath: str = None, verbose: bool = True):
     """
     Convenience function to load defrost data.
-    
+
     Parameters
     ----------
     filepath : str, optional
         Path or filename of the experimental data file. Uses default if None.
         If just a filename is given, looks in exp_data folder.
-        
+    verbose : bool, optional
+        If True, print loading messages. Default: True
+
     Returns
     -------
     tuple
@@ -387,7 +393,7 @@ def load_defrost_data(filepath: str = None):
         if not filepath.exists():
             data_dir = Path(__file__).parent / "exp_data"
             filepath = data_dir / filepath.name
-    loader = DefrostDataLoader(filepath)
+    loader = DefrostDataLoader(filepath, verbose=verbose)
     time, temperature = loader.load()
     return loader, time, temperature
 

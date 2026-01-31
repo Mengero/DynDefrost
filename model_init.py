@@ -13,10 +13,10 @@ class DefrostModel:
     """1-D Dynamic Defrost Model."""
     
     def __init__(self, n_layers=4, frost_thickness=0.005, porosity=0.9,
-                 theta_receding=None, theta_advancing=None, surface_type=None):
+                 theta_receding=None, theta_advancing=None, surface_type=None, verbose=True):
         """
         Initialize the defrost model.
-        
+
         Parameters
         ----------
         n_layers : int
@@ -41,7 +41,8 @@ class DefrostModel:
         self.n_layers = n_layers
         self.frost_thickness = frost_thickness
         self.porosity = porosity
-        
+        self.verbose = verbose
+
         # Material properties (pure substances)
         self.rho_ice = 917.0       # Ice density [kg/m³]
         self.rho_water = 1000.0    # Water density [kg/m³]
@@ -93,19 +94,23 @@ class DefrostModel:
         if theta_receding is None and theta_advancing is None and surface_type is not None:
             # Normalize surface_type (handle variations like "60deg", "60deg_", etc.)
             surface_type_clean = surface_type.lower().strip()
-            if '60' in surface_type_clean or surface_type_clean == '60deg':
-                theta_receding = self.theta_60_receding
-                theta_advancing = self.theta_60_advancing
-                print(f"Surface type '{surface_type}' detected: Using 60° contact angles")
-                print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
-            elif '160' in surface_type_clean or surface_type_clean == '160deg':
+            # Check 160 first to avoid substring match ('60' is in '160')
+            if '160' in surface_type_clean or surface_type_clean == '160deg':
                 theta_receding = self.theta_160_receding
                 theta_advancing = self.theta_160_advancing
-                print(f"Surface type '{surface_type}' detected: Using 160° contact angles")
-                print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
+                if self.verbose:
+                    print(f"Surface type '{surface_type}' detected: Using 160° contact angles")
+                    print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
+            elif '60' in surface_type_clean or surface_type_clean == '60deg':
+                theta_receding = self.theta_60_receding
+                theta_advancing = self.theta_60_advancing
+                if self.verbose:
+                    print(f"Surface type '{surface_type}' detected: Using 60° contact angles")
+                    print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
             else:
-                print(f"Warning: Unknown surface_type '{surface_type}'. Valid values: '60deg', '160deg'")
-                print(f"  Contact angles will not be set automatically.")
+                if self.verbose:
+                    print(f"Warning: Unknown surface_type '{surface_type}'. Valid values: '60deg', '160deg'")
+                    print(f"  Contact angles will not be set automatically.")
         
         # Surface retention properties
         self.theta_receding = theta_receding
@@ -142,18 +147,19 @@ class DefrostModel:
         
         # Calculate effective properties
         self._calculate_effective_properties()
-        
-        print(f"Initialized {n} layers")
-        print(f"  Layer thickness: {self.dx[0]*1000:.4f} mm each")
-        print(f"  Initial volume fractions: alpha_ice={self.alpha_ice[0]:.3f}, alpha_water={self.alpha_water[0]:.3f}, alpha_air={self.alpha_air[0]:.3f}")
-        
-        # Print surface retention information if available
-        if self.surface_retention is not None:
-            print(f"\nSurface Retention Properties:")
-            print(f"  Contact angles: θ_R={self.theta_receding:.1f}°, θ_A={self.theta_advancing:.1f}°")
-            print(f"  Surface type: {self.surface_type_classification}")
-            print(f"  Maximum retention: {self.surface_retention*1000:.2f} g/m²")
-            print(f"  Maximum retention thickness: {self.surface_retention_thickness*1000:.4f} mm")
+
+        if self.verbose:
+            print(f"Initialized {n} layers")
+            print(f"  Layer thickness: {self.dx[0]*1000:.4f} mm each")
+            print(f"  Initial volume fractions: alpha_ice={self.alpha_ice[0]:.3f}, alpha_water={self.alpha_water[0]:.3f}, alpha_air={self.alpha_air[0]:.3f}")
+
+            # Print surface retention information if available
+            if self.surface_retention is not None:
+                print(f"\nSurface Retention Properties:")
+                print(f"  Contact angles: θ_R={self.theta_receding:.1f}°, θ_A={self.theta_advancing:.1f}°")
+                print(f"  Surface type: {self.surface_type_classification}")
+                print(f"  Maximum retention: {self.surface_retention*1000:.2f} g/m²")
+                print(f"  Maximum retention thickness: {self.surface_retention_thickness*1000:.4f} mm")
         
     def calculate_specific_heat(self):
         """
@@ -407,8 +413,9 @@ class DefrostModel:
         """
         self.T = np.full(self.n_layers, T_initial)
         self._calculate_enthalpy()
-        print(f"  Initial temperature: {T_initial}°C")
-        print(f"  Initial enthalpy: {self.H[0]:.2e} J/m³")
+        if self.verbose:
+            print(f"  Initial temperature: {T_initial}°C")
+            print(f"  Initial enthalpy: {self.H[0]:.2e} J/m³")
         
     def _calculate_enthalpy(self):
         """
@@ -463,7 +470,8 @@ class DefrostModel:
         """
         self.T_surface = T_surface
         self.T_ambient = T_ambient
-        print(f"  Boundary: T_surface = {T_surface}°C")
+        if self.verbose:
+            print(f"  Boundary: T_surface = {T_surface}°C")
         
     def get_layer_properties(self, layer_idx):
         """
@@ -531,10 +539,10 @@ class DefrostModel:
         )
 
 
-def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=-20.0, surface_type=None):
+def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=-20.0, surface_type=None, verbose=True):
     """
     Convenience function to initialize the defrost model.
-    
+
     Parameters
     ----------
     n_layers : int
@@ -548,12 +556,14 @@ def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=
     surface_type : str, optional
         Surface type identifier: '60deg' or '160deg'. If provided, will automatically
         assign corresponding contact angles. Default: None
-        
+    verbose : bool, optional
+        If True, print initialization messages. Default: True
+
     Returns
     -------
     DefrostModel
         Initialized model instance
     """
-    model = DefrostModel(n_layers=n_layers, frost_thickness=frost_thickness, porosity=porosity, surface_type=surface_type)
+    model = DefrostModel(n_layers=n_layers, frost_thickness=frost_thickness, porosity=porosity, surface_type=surface_type, verbose=verbose)
     model.set_initial_temperature(T_initial)
     return model

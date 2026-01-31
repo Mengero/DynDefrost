@@ -1,0 +1,47 @@
+Run started at 2026-01-29T19:51:51.185953
+Finding Critical Sloughing Thickness for Different Porosities
+  Found 12 porosity values with at least one case with data file
+    Porosity 0.855: 1 Slough, 0 other
+    Porosity 0.868: 1 Slough, 0 other
+    Porosity 0.879: 1 Slough, 0 other
+    Porosity 0.882: 1 Slough, 0 other
+    Porosity 0.886: 1 Slough, 0 other
+    Porosity 0.895: 1 Slough, 0 other
+    Porosity 0.905: 1 Slough, 0 other
+    Porosity 0.920: 0 Slough, 1 other
+    Porosity 0.923: 0 Slough, 1 other
+    Porosity 0.938: 1 Slough, 0 other
+    Porosity 0.956: 0 Slough, 2 other
+    Porosity 0.977: 0 Slough, 1 other
+Thickness step: 0.1 mm
+  Porosity 1/12: 0.855 (Slough case: 180min_60deg_55%_22C.txt, thickness 4.09 mm)
+      ✓ All layers became water at 2.00 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.000 mm
+  Porosity 2/12: 0.868 (Slough case: 120min_60deg_55%_22C.txt, thickness 3.65 mm)
+      ✓ All layers became water at 2.00 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.000 mm
+  Porosity 3/12: 0.879 (Slough case: 180min_60deg_45%_22C.txt, thickness 3.14 mm)
+      ✓ All layers became water at 2.10 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.100 mm
+  Porosity 4/12: 0.882 (Slough case: 150min_60deg_55%_22C.txt, thickness 3.89 mm)
+      ✓ All layers became water at 2.20 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.200 mm
+  Porosity 5/12: 0.886 (skipped)
+  Porosity 6/12: 0.895 (Slough case: 150min_60deg_45%_22C.txt, thickness 3.04 mm)
+      ✓ All layers became water at 2.30 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.300 mm
+  Porosity 7/12: 0.905 (Slough case: 120min_60deg_45%_22C.txt, thickness 2.84 mm)
+      ✓ All layers became water at 2.44 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.440 mm
+  Porosity 8/12: 0.920 (No-slough case: 60min_60deg_55%_22C.txt, thickness 2.51 mm)
+      ✓ Sloughing at 2.81 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.810 mm
+  Porosity 9/12: 0.923 (No-slough case: 90min_60deg_45%_22C.txt, thickness 2.51 mm)
+      ✓ Sloughing at 3.01 mm → critical sloughing thickness
+    Critical sloughing thickness: 3.010 mm
+  Porosity 10/12: 0.938 (Slough case: 90min_60deg_55%_22C.txt, thickness 3.26 mm)
+      ✓ All layers became water at 2.66 mm → critical sloughing thickness
+    Critical sloughing thickness: 2.660 mm
+  Porosity 11/12: 0.956 (No-slough case: 30min_60deg_83%_12C.txt, thickness 3.14 mm)
+Interrupted by user
+Run ended at 2026-01-30T11:09:00.911330

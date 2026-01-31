@@ -21,10 +21,39 @@ figure_dir = Path("figure")
 figure_dir.mkdir(exist_ok=True)
 
 
+def enforce_non_decreasing_temperature(time, temperature):
+    """
+    Lock temperature so it never reduces during defrost.
+
+    When experiment temperature rises then dips slightly (e.g. bad human operation),
+    hold the temperature at the previous level until the actual reading catches
+    back up. Result is monotonically non-decreasing in time.
+
+    Parameters
+    ----------
+    time : array-like
+        Time points [s]
+    temperature : array-like
+        Surface temperature [°C]
+
+    Returns
+    -------
+    temperature_corrected : np.ndarray
+        Same length as temperature; values are max so far at each step.
+    n_locked : int
+        Number of time steps where temperature was held (not allowed to drop).
+    """
+    temperature = np.asarray(temperature, dtype=float)
+    # Running maximum: once we've risen, we never go down until data rises again
+    temperature_corrected = np.maximum.accumulate(temperature)
+    n_locked = int(np.sum(temperature_corrected != temperature))
+    return temperature_corrected, n_locked
+
+
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "55min_60deg_83%_12C.txt"
+    data_file = "90min_160deg_83%_12C.txt"
     # n_layers will be automatically calculated based on initial thickness and retention thickness
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed
@@ -90,12 +119,13 @@ def main():
     theta_advancing = None
     if contact_angle_str is not None:
         surface_type_clean = contact_angle_str.lower().strip()
-        if '60' in surface_type_clean or surface_type_clean == '60deg':
-            theta_receding = 60.0
-            theta_advancing = 70.0
-        elif '160' in surface_type_clean or surface_type_clean == '160deg':
+        # Check 160 first to avoid substring match ('60' is in '160')
+        if '160' in surface_type_clean or surface_type_clean == '160deg':
             theta_receding = 155.0
             theta_advancing = 160.0
+        elif '60' in surface_type_clean or surface_type_clean == '60deg':
+            theta_receding = 60.0
+            theta_advancing = 70.0
     
     # Calculate surface retention thickness if contact angles are available
     if theta_receding is not None and theta_advancing is not None:
@@ -153,7 +183,12 @@ def main():
     # This smooths out large gradients and prevents temperature jumps
     time, temperature = interpolate_temperature(time_raw, temperature_raw, dt=dt, kind='linear')
     print_interpolation_info(time_raw, temperature_raw, time, temperature, dt)
-    
+
+    # Lock temperature so it never reduces (fix bad-operation dips during defrost)
+    temperature, n_locked = enforce_non_decreasing_temperature(time, temperature)
+    if n_locked > 0:
+        print(f"\nApplied non-decreasing temperature lock: {n_locked} time step(s) held at previous level (dips removed).")
+
     # Initialize model with surface type from filename
     model = initialize_model(
         n_layers=n_layers,

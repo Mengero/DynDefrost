@@ -71,7 +71,7 @@ def calculate_surface_retention(theta_receding, theta_advancing,
             delta = delta_auto
     else:
         # If both k and delta are provided, classify surface type based on angles
-        if theta_advancing > 150:
+        if theta_advancing > 120:
             surface_type = "superhydrophobic"
         elif theta_advancing < 80:
             surface_type = "hydrophilic"
@@ -133,8 +133,8 @@ def _determine_surface_parameters(theta_advancing, theta_receding, hysteresis):
         - k: float, retention coefficient
         - delta: float, droplet spacing [m]
     """
-    # Superhydrophobic surface: θ > 150°
-    if theta_advancing > 150:
+    # Superhydrophobic surface: θ > 120°
+    if theta_advancing > 120:
         # Small hysteresis (Δθ ≈ 5-10°)
         # k ≈ 0.5-0.6 (θ_eq-dominated)
         # δ ≈ 5 mm
@@ -270,10 +270,10 @@ if __name__ == "__main__":
     print("=" * 70)
     
     # Example 1: Superhydrophobic surface
-    print("\n1. Superhydrophobic Surface (θ > 150°)")
+    print("\n1. Superhydrophobic Surface (θ > 120°)")
     print("-" * 70)
-    theta_R = 155
-    theta_A = 160
+    theta_R = 135
+    theta_A = 140
     result = calculate_surface_retention(theta_R, theta_A)
     print(f"   Receding angle: {theta_R}°")
     print(f"   Advancing angle: {theta_A}°")

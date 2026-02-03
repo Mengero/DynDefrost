@@ -200,17 +200,27 @@ def plot_single_surface(ax, surface_data, surface_name, fitted_curve=None, poros
         ax.plot(x_fit, y_fit, 'g-', linewidth=2, label='Critical threshold', zorder=1)
 
     # Customize plot
-    ax.set_xlabel('Frost Porosity (-)', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Frost Thickness (mm)', fontsize=12, fontweight='bold')
-    ax.set_title(surface_name, fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3, linestyle='--')
-    ax.legend(loc='best', fontsize=10, framealpha=0.9)
+    ax.set_xlabel('Frost Porosity (-)', fontsize=18, fontweight='bold')
+    ax.set_ylabel('Frost Thickness (mm)', fontsize=18, fontweight='bold')
+    ax.set_title(surface_name, fontsize=20, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=16, direction='in')
+    ax.grid(True, alpha=0.3)
+
+    # Make axis edges thicker
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+
+    # Set plot region to 1:1 aspect ratio (square box)
+    ax.set_box_aspect(1)
+
+    # Add legend outside plotting region
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=16, framealpha=0.9)
 
     return slough_indices, other_indices
 
 
 def plot_thickness_vs_porosity(data_file='exp_data/defrost_sloughing_experiment_data.csv',
-                                output_dir='figure', figsize=(16, 6),
+                                output_dir='figure', figsize=(18, 8),
                                 threshold_data_file='figure/sloughing_threshold_data.csv'):
     """
     Plot frost thickness vs porosity with different markers for behavior types.
@@ -296,8 +306,8 @@ def plot_thickness_vs_porosity(data_file='exp_data/defrost_sloughing_experiment_
     slough_s, other_s = plot_single_surface(ax2, superhydrophobic_data, 'Superhydrophobic Surface')
     
     # Add overall title
-    fig.suptitle('Frost Thickness vs Porosity by Surface Type', 
-                 fontsize=16, fontweight='bold', y=1.02)
+    fig.suptitle('Frost Thickness vs Porosity by Surface Type',
+                 fontsize=22, fontweight='bold', y=1.02)
     
     plt.tight_layout()
     

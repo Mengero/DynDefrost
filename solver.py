@@ -93,7 +93,7 @@ class DefrostSolver:
         
         # Shrinkage model parameters
         self.sigma = 72e-3  # Surface tension [N/m] (water-air at 0°C)
-        self.eta_0 = 6e4  # Base viscosity [Pa·s]
+        self.eta_0 = 2e4  # Base viscosity [Pa·s]
         self.b = 3.0  # Structural constant (typically 2-4)
         self.C_wet = 700  # Lubricant constant
         self.d_ice_initial = 5e-4  # Initial ice grain diameter [m] (10 microns, typical)
@@ -104,7 +104,7 @@ class DefrostSolver:
         # Critical detachment (sloughing) parameters
         # Calibrated k values for different contact angles
         self.k_60 = 245.2220   # Retention coefficient for 60° contact angle
-        self.k_160 = 3340.7267  # Retention coefficient for 160° contact angle
+        self.k_140 = 2300  # Retention coefficient for 140° contact angle
         
         # Calibrated f(alpha_water) function parameters
         # f(alpha_water) = A * log(B * alpha_water + e) + C
@@ -1951,11 +1951,11 @@ class DefrostSolver:
         # Select k based on contact angle (interpolate if needed)
         if theta_deg <= 60:
             k = self.k_60
-        elif theta_deg >= 160:
-            k = self.k_160
+        elif theta_deg >= 140:
+            k = self.k_140
         else:
-            # Linear interpolation between 60° and 160°
-            k = self.k_60 + (self.k_160 - self.k_60) * (theta_deg - 60) / (160 - 60)
+            # Linear interpolation between 60° and 140°
+            k = self.k_60 + (self.k_140 - self.k_60) * (theta_deg - 60) / (140 - 60)
         
         # Calculate base adhesion
         tau_base = self._calculate_base_adhesion(theta_deg)

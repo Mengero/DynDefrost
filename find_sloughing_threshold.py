@@ -44,8 +44,8 @@ class Tee:
 
 def _data_filename_from_row(row, surface_type='Hydrophilic'):
     """Build temperature data filename from experiment CSV row (e.g. 120min_60deg_55%_22C.txt)."""
-    # Hydrophilic -> 60deg, Superhydrophobic -> 160deg
-    deg = '60deg' if surface_type.strip() == 'Hydrophilic' else '160deg'
+    # Hydrophilic -> 60deg, Superhydrophobic -> 140deg
+    deg = '60deg' if surface_type.strip() == 'Hydrophilic' else '140deg'
     t_min = int(float(row['frosting time (min)']))
     rh_pct = int(round(float(row['RH']) * 100))
     T_air = int(float(row['Air Dry Bulb [C]']))
@@ -159,7 +159,7 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
         Fixed time step to use [s]. If provided, this dt is used directly instead of calculating.
         This ensures consistency across simulations. Default: None (calculate dt)
     surface_type : str
-        Surface type: 'Hydrophilic' (60deg) or 'Superhydrophobic' (160deg)
+        Surface type: 'Hydrophilic' (60deg) or 'Superhydrophobic' (140deg)
 
     Returns:
     --------
@@ -172,12 +172,12 @@ def run_simulation(frost_thickness, porosity, time_raw, temperature_raw, T_ambie
 
     # Calculate surface retention thickness to determine number of layers (same as main.py)
     # Determine contact angles based on surface type
-    # Check 160/Superhydrophobic first to avoid substring match ('60' is in '160')
+    # Check 140/Superhydrophobic first to avoid substring match
     surface_type_clean = surface_type.lower().strip()
-    if '160' in surface_type_clean or 'superhydrophobic' in surface_type_clean:
-        theta_receding = 155.0
-        theta_advancing = 160.0
-        surface_type_deg = '160deg'
+    if '140' in surface_type_clean or 'superhydrophobic' in surface_type_clean:
+        theta_receding = 135.0
+        theta_advancing = 140.0
+        surface_type_deg = '140deg'
     else:
         theta_receding = 60.0
         theta_advancing = 70.0

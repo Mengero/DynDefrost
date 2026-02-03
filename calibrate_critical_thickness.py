@@ -4,12 +4,12 @@ Calibration script for critical detachment frost thickness.
 Target values:
 - alpha_water = 0.8:
   - θ = 60°: h_crit ≈ 2.5 mm
-  - θ = 160°: h_crit ≈ 1.5 mm
+  - θ = 140°: h_crit ≈ 1.5 mm
 - alpha_water = 0:
   - θ = 60°: h_crit ≈ 10 mm
-  - θ = 160°: h_crit ≈ 5 mm
+  - θ = 140°: h_crit ≈ 5 mm
 
-Note: Since tau_base(60°)/tau_base(160°) ≈ 24.87, but target h_crit ratio is 2,
+Note: Since tau_base(60°)/tau_base(140°) ≈ 24.87, but target h_crit ratio is 2,
 we may need different k values for different contact angles, or adjust the formula.
 """
 
@@ -102,25 +102,25 @@ def objective_function(params, rho_eff=101.1, g=9.81):
     """
     Objective function for calibration.
     
-    Parameters: [k_60, k_160, A, B, e, C]
+    Parameters: [k_60, k_140, A, B, e, C]
     - k_60: retention coefficient for 60°
-    - k_160: retention coefficient for 160°
+    - k_140: retention coefficient for 140°
     - A, B, e, C: parameters for f(alpha_water) = A*log(B*alpha_water + e) + C
     - A should be negative
     """
-    k_60, k_160, A, B, e, C = params
+    k_60, k_140, A, B, e, C = params
     
     # Ensure parameters are reasonable
     # k values must be positive, A must be negative, B and e must be positive
-    if any(p <= 0 for p in [k_60, k_160, B, e]) or A >= 0 or C < 0:
+    if any(p <= 0 for p in [k_60, k_140, B, e]) or A >= 0 or C < 0:
         return 1e10
     
     # Target values
     targets = {
         (60, 0.0, k_60): 10e-3,    # 10 mm
         (60, 0.8, k_60): 2.5e-3,   # 2.5 mm
-        (160, 0.0, k_160): 5e-3,    # 5 mm
-        (160, 0.8, k_160): 1.5e-3,  # 1.5 mm
+        (140, 0.0, k_140): 5e-3,    # 5 mm
+        (140, 0.8, k_140): 1.5e-3,  # 1.5 mm
     }
     
     error_sum = 0.0
@@ -183,11 +183,11 @@ def calculate_k_adjustment_for_shift(shift_mm, tau_base, f_water, rho_eff=101.1,
 
 def calibrate_constants(rho_eff=101.1, g=9.81):
     """Calibrate constants with separate k values for each contact angle."""
-    # Bounds: [k_60, k_160, A, B, e, C]
+    # Bounds: [k_60, k_140, A, B, e, C]
     # A should be negative
     bounds = [
         (10.0, 10000.0),   # k_60
-        (10.0, 10000.0),   # k_160
+        (10.0, 10000.0),   # k_140
         (-10.0, -0.001),  # A (negative)
         (1.0, 200.0),      # B
         (0.001, 1.0),      # e
@@ -205,11 +205,11 @@ def calibrate_constants(rho_eff=101.1, g=9.81):
         polish=True
     )
     
-    k_60, k_160, A, B, e, C = result.x
+    k_60, k_140, A, B, e, C = result.x
     
     return {
         'k_60': k_60,
-        'k_160': k_160,
+        'k_140': k_140,
         'A': A,
         'B': B,
         'e': e,
@@ -230,10 +230,10 @@ if __name__ == "__main__":
     print(f"\nTarget Values:")
     print(f"  alpha_water = 0.0:")
     print(f"    θ = 60°:  h_crit = 10.0 mm")
-    print(f"    θ = 160°: h_crit = 5.0 mm")
+    print(f"    θ = 140°: h_crit = 5.0 mm")
     print(f"  alpha_water = 0.8:")
     print(f"    θ = 60°:  h_crit = 2.5 mm")
-    print(f"    θ = 160°: h_crit = 1.5 mm")
+    print(f"    θ = 140°: h_crit = 1.5 mm")
     
     print(f"\nCalibrating constants (with separate k for each angle)...")
     calibrated = calibrate_constants(rho_eff, g)
@@ -242,7 +242,7 @@ if __name__ == "__main__":
     print("Calibrated Parameters:")
     print(f"{'='*70}")
     print(f"  k_60 (retention coefficient for 60°): {calibrated['k_60']:.4f}")
-    print(f"  k_160 (retention coefficient for 160°): {calibrated['k_160']:.4f}")
+    print(f"  k_140 (retention coefficient for 140°): {calibrated['k_140']:.4f}")
     print(f"  A (multiplier for log, negative): {calibrated['A']:.6f}")
     print(f"  B (multiplier for alpha_water): {calibrated['B']:.4f}")
     print(f"  e (offset in log): {calibrated['e']:.6f}")
@@ -256,7 +256,7 @@ if __name__ == "__main__":
     print(f"{'='*70}")
     
     k_60 = calibrated['k_60']
-    k_160 = calibrated['k_160']
+    k_140 = calibrated['k_140']
     A = calibrated['A']
     B = calibrated['B']
     e = calibrated['e']
@@ -265,8 +265,8 @@ if __name__ == "__main__":
     test_cases = [
         (60, 0.0, 10e-3, k_60),
         (60, 0.8, 2.5e-3, k_60),
-        (160, 0.0, 5e-3, k_160),
-        (160, 0.8, 1.5e-3, k_160),
+        (140, 0.0, 5e-3, k_140),
+        (140, 0.8, 1.5e-3, k_140),
     ]
     
     print(f"\n{'θ (deg)':<12} {'α_water':<12} {'Target (mm)':<15} {'Calculated (mm)':<18} {'Error (%)':<15}")
@@ -301,26 +301,26 @@ if __name__ == "__main__":
     print(f"{'='*70}")
     print("\nOption 1: Reduce k values proportionally")
     print("  - This will shift the entire curve downward")
-    print("  - For a 1mm shift, reduce k_60 and k_160 by approximately:")
+    print("  - For a 1mm shift, reduce k_60 and k_140 by approximately:")
     
     # Calculate approximate k reduction for typical values
     # Use average f_water value (between f(0) and f(0.8))
     f_avg = (calculate_f_water(0.0, A, B, e, C) + calculate_f_water(0.8, A, B, e, C)) / 2
     tau_base_60 = calculate_base_adhesion(60)
-    tau_base_160 = calculate_base_adhesion(160)
+    tau_base_140 = calculate_base_adhesion(140)
     
     # Calculate k reduction needed for 1mm shift
     shift_mm = -1.0  # Shift down by 1mm
     k_60_new = calculate_k_adjustment_for_shift(shift_mm, tau_base_60, f_avg, rho_eff, g, k_60)
-    k_160_new = calculate_k_adjustment_for_shift(shift_mm, tau_base_160, f_avg, rho_eff, g, k_160)
+    k_140_new = calculate_k_adjustment_for_shift(shift_mm, tau_base_140, f_avg, rho_eff, g, k_140)
     
     k_60_reduction = k_60 - k_60_new
-    k_160_reduction = k_160 - k_160_new
+    k_140_reduction = k_140 - k_140_new
     k_60_reduction_pct = (k_60_reduction / k_60) * 100
-    k_160_reduction_pct = (k_160_reduction / k_160) * 100
+    k_140_reduction_pct = (k_140_reduction / k_140) * 100
     
     print(f"    k_60:  {k_60:.4f} → {k_60_new:.4f} (reduce by {k_60_reduction:.4f} or {k_60_reduction_pct:.1f}%)")
-    print(f"    k_160: {k_160:.4f} → {k_160_new:.4f} (reduce by {k_160_reduction:.4f} or {k_160_reduction_pct:.1f}%)")
+    print(f"    k_140: {k_140:.4f} → {k_140_new:.4f} (reduce by {k_140_reduction:.4f} or {k_140_reduction_pct:.1f}%)")
     
     print("\nOption 2: Add offset parameter to equation")
     print("  - Modify calculate_critical_thickness() to include: h_crit = ... + offset")

@@ -13,7 +13,7 @@ from datetime import datetime
 # Mapping from contact angle to surface type
 SURFACE_TYPE_MAP = {
     '60deg': 'Hydrophilic',
-    '160deg': 'Superhydrophobic',
+    '140deg': 'Superhydrophobic',
 }
 
 
@@ -309,7 +309,7 @@ def parse_case_filename(filename):
     frosting_time = float(frosting_time_str)
     
     # Parse contact angle -> surface type
-    contact_angle = parts[1]  # e.g., '60deg' or '160deg'
+    contact_angle = parts[1]  # e.g., '60deg' or '140deg'
     surface_type = SURFACE_TYPE_MAP.get(contact_angle, contact_angle)
     
     # Parse RH (e.g., '83%' -> 0.83)

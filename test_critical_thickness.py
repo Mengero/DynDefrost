@@ -244,7 +244,7 @@ if __name__ == "__main__":
     print("=" * 70)
     
     # Test parameters
-    contact_angles = [60, 160]  # degrees
+    contact_angles = [60, 140]  # degrees
     alpha_water_values = np.linspace(0.0, 1.0, 21)  # 0 to 1 in steps of 0.05
     g = 9.81  # Gravitational acceleration [m/s²]
     
@@ -309,7 +309,7 @@ if __name__ == "__main__":
     
     # Calibrated k values (from calibrate_critical_thickness.py)
     k_60 = 245.2220
-    k_160 = 3340.7267
+    k_140 = 1000
     
     # Calibrated f(alpha_water) parameters
     A_calibrated = -0.051472
@@ -332,11 +332,11 @@ if __name__ == "__main__":
             # Select k based on contact angle
             if theta_deg == 60:
                 k = k_60
-            elif theta_deg == 160:
-                k = k_160
+            elif theta_deg == 140:
+                k = k_140
             else:
                 # Default to average if other angle
-                k = (k_60 + k_160) / 2
+                k = (k_60 + k_140) / 2
             
             # Calculate base adhesion
             tau_base = calculate_base_adhesion(theta_deg)
@@ -416,42 +416,42 @@ if __name__ == "__main__":
     axes[0, 1].legend()
     axes[0, 1].set_xlim([0, 1])
     
-    # Plot 3: h_crit vs α_water for θ=160° (compare densities)
+    # Plot 3: h_crit vs α_water for θ=140° (compare densities)
     for case_key, case_data in case_results.items():
         style = case_styles[case_key]
-        results = case_data['results'][160]
+        results = case_data['results'][140]
         axes[0, 2].plot(alpha_water_values, results['h_crit']*1000, 
                        color=style['color'], linestyle=style['linestyle'], 
                        linewidth=2, marker=style['marker'], markersize=4,
                        label=f"{case_data['name']} (ρ={case_data['rho_eff']:.0f} kg/m³)")
     axes[0, 2].set_xlabel('Water Volume Fraction (α_water)')
     axes[0, 2].set_ylabel('Critical Thickness (mm)')
-    axes[0, 2].set_title('Critical Thickness vs α_water (θ = 160°)')
+    axes[0, 2].set_title('Critical Thickness vs α_water (θ = 140°)')
     axes[0, 2].grid(True, alpha=0.3)
     axes[0, 2].legend()
     axes[0, 2].set_xlim([0, 1])
     
     # Plot 4: Base adhesion comparison
     tau_60 = case_results['low_density']['results'][60]['tau_base']
-    tau_160 = case_results['low_density']['results'][160]['tau_base']
-    axes[1, 0].bar(['θ = 60°', 'θ = 160°'], [tau_60*1000, tau_160*1000], 
+    tau_140 = case_results['low_density']['results'][140]['tau_base']
+    axes[1, 0].bar(['θ = 60°', 'θ = 140°'], [tau_60*1000, tau_140*1000], 
                    color=['blue', 'red'], alpha=0.7)
     axes[1, 0].set_ylabel('Base Adhesion (mN/m²)')
     axes[1, 0].set_title('Base Adhesion Comparison')
     axes[1, 0].grid(True, alpha=0.3, axis='y')
     
-    # Plot 5: h_crit ratio (160° / 60°) for different densities
+    # Plot 5: h_crit ratio (140° / 60°) for different densities
     for case_key, case_data in case_results.items():
         style = case_styles[case_key]
         results_60 = case_data['results'][60]
-        results_160 = case_data['results'][160]
-        ratio = results_160['h_crit'] / results_60['h_crit']
+        results_140 = case_data['results'][140]
+        ratio = results_140['h_crit'] / results_60['h_crit']
         axes[1, 1].plot(alpha_water_values, ratio, 
                        color=style['color'], linestyle=style['linestyle'], 
                        linewidth=2, marker=style['marker'], markersize=4,
                        label=case_data['name'])
     axes[1, 1].set_xlabel('Water Volume Fraction (α_water)')
-    axes[1, 1].set_ylabel('h_crit(160°) / h_crit(60°)')
+    axes[1, 1].set_ylabel('h_crit(140°) / h_crit(60°)')
     axes[1, 1].set_title('Critical Thickness Ratio')
     axes[1, 1].grid(True, alpha=0.3)
     axes[1, 1].legend()

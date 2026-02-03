@@ -53,7 +53,7 @@ def enforce_non_decreasing_temperature(time, temperature):
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "90min_160deg_83%_12C.txt"
+    data_file = "60min_140deg_83%_12C.txt"
     # n_layers will be automatically calculated based on initial thickness and retention thickness
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed
@@ -66,7 +66,7 @@ def main():
     
     # Apply -1.2°C offset to surface temperature readings
     # The real temperature is 1.2°C lower than the reading
-    temperature_offset = -1  # [°C]
+    temperature_offset = 0  # [°C]
     temperature_raw = temperature_raw + temperature_offset
     print(f"\nApplied temperature offset: {temperature_offset:.1f}°C")
     print(f"  Original temperature range: {np.min(temperature_raw - temperature_offset):.1f}°C to {np.max(temperature_raw - temperature_offset):.1f}°C")
@@ -81,7 +81,7 @@ def main():
     name = Path(data_file).stem
     parts = name.split('_')
     if len(parts) > 1:
-        contact_angle_str = parts[1]  # e.g., "60deg" or "160deg"
+        contact_angle_str = parts[1]  # e.g., "60deg" or "140deg"
     
     # Create figure filename prefix based on data file
     # e.g., "sim_result_180min_60deg_55%_22C"
@@ -119,10 +119,10 @@ def main():
     theta_advancing = None
     if contact_angle_str is not None:
         surface_type_clean = contact_angle_str.lower().strip()
-        # Check 160 first to avoid substring match ('60' is in '160')
-        if '160' in surface_type_clean or surface_type_clean == '160deg':
-            theta_receding = 155.0
-            theta_advancing = 160.0
+        # Check 140 first to avoid substring match ('40' might appear elsewhere)
+        if '140' in surface_type_clean or surface_type_clean == '140deg':
+            theta_receding = 135.0
+            theta_advancing = 140.0
         elif '60' in surface_type_clean or surface_type_clean == '60deg':
             theta_receding = 60.0
             theta_advancing = 70.0
@@ -194,14 +194,24 @@ def main():
         n_layers=n_layers,
         frost_thickness=frost_thickness,
         porosity=porosity,
-        T_initial=temperature[0],
-        surface_type=contact_angle_str  # e.g., "60deg" or "160deg"
+        T_initial=temperature[0],  # Placeholder, will be overwritten by steady-state profile
+        surface_type=contact_angle_str  # e.g., "60deg" or "140deg"
     )
-    
+
     # Create solver with convective heat transfer coefficient and ambient temperature
     h_conv = 1.5  # Natural convection heat transfer coefficient [W/(m²·K)]
+
+    # Set initial temperature using steady-state profile (more realistic than uniform)
+    # This calculates the temperature gradient through the frost before defrost starts
+    if T_ambient is not None:
+        model.set_initial_temperature_steady_state(
+            T_surface=temperature[0],
+            T_ambient=T_ambient,
+            h_conv=h_conv
+        )
+
     solver = DefrostSolver(model, dt=dt, method=method, h_conv=h_conv, T_ambient=T_ambient)
-    
+
     if T_ambient is not None:
         print(f"  Ambient air temperature: {T_ambient:.1f}°C")
         print(f"  Convective heat transfer coefficient: {h_conv:.1f} W/(m²·K)")

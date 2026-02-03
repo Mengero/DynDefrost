@@ -1,16 +1,15 @@
 """
-Plot Representative Temperature Curve
+Plot Temperature Repeatability
 
-This script excludes experiments with problematic temperature ranges and creates
-a representative temperature vs time curve from the remaining good experiments.
+This script plots temperature curves from multiple experimental cases to demonstrate
+that the experimental temperature control is repeatable across different tests.
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from datetime import datetime
-from scipy.interpolate import interp1d
-from scipy import stats
+import csv
 
 
 def parse_time_to_seconds(time_str, start_time=None):
@@ -25,74 +24,38 @@ def parse_time_to_seconds(time_str, start_time=None):
         return None, None
 
 
-def filter_increasing_temperature(time, temperature, tolerance=0.01):
-    """
-    Filter data to keep only segments where temperature is constant or increasing.
-    
-    Parameters:
-    -----------
-    time : array
-        Time array
-    temperature : array
-        Temperature array
-    tolerance : float
-        Tolerance for considering temperature as constant (in °C)
-        
-    Returns:
-    --------
-    tuple
-        (filtered_time, filtered_temperature) arrays
-    """
-    if len(time) == 0 or len(temperature) == 0:
-        return time, temperature
-    
-    # Find the starting point (lowest temperature)
-    start_idx = np.argmin(temperature)
-    
-    # From the start, keep only increasing or constant segments
-    filtered_indices = [start_idx]
-    current_max_temp = temperature[start_idx]
-    
-    for i in range(start_idx + 1, len(temperature)):
-        # Keep if temperature is greater than or equal to current max (within tolerance)
-        if temperature[i] >= current_max_temp - tolerance:
-            filtered_indices.append(i)
-            current_max_temp = max(current_max_temp, temperature[i])
-    
-    filtered_indices = np.array(filtered_indices)
-    return time[filtered_indices], temperature[filtered_indices]
-
-
-def load_experimental_data(filepath, filter_decreasing=True):
+def load_experimental_data(filepath):
     """
     Load experimental data from a .txt file.
-    
+
     Parameters:
     -----------
     filepath : str or Path
         Path to data file
-    filter_decreasing : bool
-        If True, filter out decreasing temperature segments
+
+    Returns:
+    --------
+    dict with keys: 'time', 'temperature', 'filename'
     """
     filepath = Path(filepath)
-    
+
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         lines = f.readlines()
-    
+
     data_lines = lines[1:] if len(lines) > 1 else []
-    
+
     time_sensor1 = []
     temp_sensor1 = []
     start_time_sensor1 = None
-    
+
     for line in data_lines:
         if not line.strip():
             continue
-        
+
         parts = line.strip().split('\t')
         if len(parts) < 4:
             continue
-        
+
         try:
             # Sensor 1 data (columns 2, 3)
             if parts[2].strip() and parts[3].strip():
@@ -105,323 +68,283 @@ def load_experimental_data(filepath, filter_decreasing=True):
                     temp_sensor1.append(float(parts[3]))
         except (ValueError, IndexError):
             continue
-    
-    time_array = np.array(time_sensor1)
-    temp_array = np.array(temp_sensor1)
-    
-    # Filter out decreasing temperature segments
-    if filter_decreasing and len(time_array) > 0:
-        time_array, temp_array = filter_increasing_temperature(time_array, temp_array)
-    
+
     return {
-        'time': time_array,
-        'temperature': temp_array,
+        'time': np.array(time_sensor1),
+        'temperature': np.array(temp_sensor1),
         'filename': filepath.name
     }
 
 
-def identify_problematic_experiments(data_dir='exp_data', min_data_points=100, 
-                                     min_temp_range=15.0):
+def plot_temperature_repeatability(data_dir='exp_data', output_dir='figure', figsize=(10, 7)):
     """
-    Identify experiments with problematic temperature ranges.
-    
-    Criteria:
-    - Too few data points
-    - Temperature range too small
-    - Temperature doesn't reach reasonable values
-    """
-    data_path = Path(data_dir)
-    data_files = sorted([f for f in data_path.glob('*.txt')])
-    
-    problematic = []
-    good = []
-    
-    for filepath in data_files:
-        try:
-            data = load_experimental_data(filepath, filter_decreasing=True)
-            
-            if len(data['time']) < min_data_points:
-                problematic.append(data['filename'])
-                print(f"  {data['filename']}: Too few data points ({len(data['time'])})")
-                continue
-            
-            temp_range = np.max(data['temperature']) - np.min(data['temperature'])
-            if temp_range < min_temp_range:
-                problematic.append(data['filename'])
-                print(f"  {data['filename']}: Temperature range too small ({temp_range:.1f}°C)")
-                continue
-            
-            # Check if temperature starts around -20°C and reaches above 0°C
-            initial_temp = data['temperature'][0]
-            final_temp = data['temperature'][-1]
-            
-            if initial_temp > -15 or final_temp < 0:
-                problematic.append(data['filename'])
-                print(f"  {data['filename']}: Unusual temperature range ({initial_temp:.1f}°C to {final_temp:.1f}°C)")
-                continue
-            
-            good.append(data)
-            
-        except Exception as e:
-            problematic.append(filepath.name)
-            print(f"  {filepath.name}: Error loading - {e}")
-    
-    return good, problematic
+    Plot temperature curves from selected experimental cases to show repeatability.
 
-
-def create_representative_curve(good_data, time_resolution=1.0, T_ambient=12.0):
-    """
-    Create a representative temperature curve by averaging/interpolating good experiments.
-    Extends the curve to reach ambient temperature.
-    
     Parameters:
     -----------
-    good_data : list
-        List of data dictionaries with 'time' and 'temperature' arrays
-    time_resolution : float
-        Time resolution in seconds for the representative curve
-    T_ambient : float
-        Ambient temperature to extend to [°C]
+    data_dir : str
+        Directory containing experimental data files
+    output_dir : str
+        Directory to save the output figure
+    figsize : tuple
+        Figure size (width, height) in inches
     """
-    if not good_data:
-        raise ValueError("No good data available")
-    
-    # Find the common time range
-    min_time = max([np.min(d['time']) for d in good_data])
-    max_time = min([np.max(d['time']) for d in good_data])
-    
-    # Create common time axis
-    time_common = np.arange(min_time, max_time + time_resolution, time_resolution)
-    
-    # Interpolate each experiment to common time axis
-    interpolated_temps = []
-    
-    for data in good_data:
-        # Remove duplicate times (keep first occurrence)
-        time_unique, indices = np.unique(data['time'], return_index=True)
-        temp_unique = data['temperature'][indices]
-        
-        # Create interpolation function
-        if len(time_unique) > 1:
-            interp_func = interp1d(time_unique, temp_unique, 
-                                  kind='linear', 
-                                  bounds_error=False, 
-                                  fill_value='extrapolate')
-            temp_interp = interp_func(time_common)
-            interpolated_temps.append(temp_interp)
-    
-    if not interpolated_temps:
-        raise ValueError("Could not interpolate any data")
-    
-    # Calculate mean and standard deviation
-    interpolated_temps = np.array(interpolated_temps)
-    mean_temp = np.mean(interpolated_temps, axis=0)
-    std_temp = np.std(interpolated_temps, axis=0)
-    
-    # Also calculate median for robustness
-    median_temp = np.median(interpolated_temps, axis=0)
-    
-    # Extend the curve to reach ambient temperature
-    # Calculate the gradient at the end (use last few points for stability)
-    n_points_for_gradient = min(10, len(mean_temp))
-    if n_points_for_gradient > 1:
-        # Calculate average gradient from last n points
-        time_gradient = time_common[-n_points_for_gradient:]
-        temp_gradient = mean_temp[-n_points_for_gradient:]
-        dT_dt = np.mean(np.diff(temp_gradient) / np.diff(time_gradient))
-        
-        # If gradient is positive and temperature hasn't reached ambient yet
-        if dT_dt > 0 and mean_temp[-1] < T_ambient:
-            # Extend time and temperature until reaching ambient
-            current_time = time_common[-1]
-            current_temp = mean_temp[-1]
-            
-            extended_time = [current_time]
-            extended_temp = [current_temp]
-            extended_std = [std_temp[-1]]
-            extended_median = [median_temp[-1]]
-            
-            # Continue extending with the same gradient
-            while extended_temp[-1] < T_ambient - 0.01:  # Stop when within 0.01°C of ambient
-                next_time = extended_time[-1] + time_resolution
-                next_temp = extended_temp[-1] + dT_dt * time_resolution
-                
-                # Don't exceed ambient temperature
-                if next_temp >= T_ambient:
-                    next_temp = T_ambient
-                
-                extended_time.append(next_time)
-                extended_temp.append(next_temp)
-                # Keep std dev constant at the last value (or gradually decrease)
-                extended_std.append(std_temp[-1] * 0.5)  # Reduce uncertainty in extended region
-                extended_median.append(next_temp)  # Median follows mean in extended region
-            
-            # Append extended data
-            time_common = np.concatenate([time_common, extended_time[1:]])
-            mean_temp = np.concatenate([mean_temp, extended_temp[1:]])
-            std_temp = np.concatenate([std_temp, extended_std[1:]])
-            median_temp = np.concatenate([median_temp, extended_median[1:]])
-            
-            print(f"  Extended curve from {current_temp:.2f}°C to {T_ambient:.1f}°C")
-            print(f"  Extended time: {current_time:.1f} s to {time_common[-1]:.1f} s")
-            print(f"  Gradient used: {dT_dt*60:.3f} °C/min")
+    print("=" * 60)
+    print("Plotting Temperature Repeatability")
+    print("=" * 60)
+
+    data_path = Path(data_dir)
+
+    # Selected cases for repeatability demonstration
+    # 2 cases from 60deg, 2 cases from 140deg (superhydrophobic)
+    selected_cases = [
+        '150min_60deg_45%_22C.txt',
+        '180min_60deg_45%_22C.txt',
+        '30min_140deg_63%_12C.txt',
+        '90min_140deg_83%_12C.txt',
+    ]
+
+    # Colors for each case
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+
+    print(f"\nLoading {len(selected_cases)} selected cases...")
+
+    # Load data for each case
+    loaded_data = []
+    for case in selected_cases:
+        filepath = data_path / case
+        if filepath.exists():
+            data = load_experimental_data(filepath)
+            loaded_data.append(data)
+            print(f"  Loaded: {case} ({len(data['time'])} points)")
         else:
-            if mean_temp[-1] >= T_ambient:
-                print(f"  Temperature already at or above ambient ({mean_temp[-1]:.2f}°C)")
-            else:
-                print(f"  Warning: Negative or zero gradient at end, cannot extend to ambient")
-    
-    return {
-        'time': time_common,
-        'mean_temperature': mean_temp,
-        'median_temperature': median_temp,
-        'std_temperature': std_temp,
-        'n_experiments': len(good_data)
-    }
+            print(f"  WARNING: File not found: {case}")
 
+    if not loaded_data:
+        print("ERROR: No data files found!")
+        return None
 
-def plot_representative_temperature(data_dir='exp_data', output_dir='figure', 
-                                    figsize=(12, 8), T_ambient=12.0):
-    """
-    Plot representative temperature curve excluding problematic experiments.
-    """
-    print("=" * 60)
-    print("Creating Representative Temperature Curve")
-    print("=" * 60)
-    
-    # Identify good and problematic experiments
-    print("\nIdentifying problematic experiments...")
-    good_data, problematic = identify_problematic_experiments(data_dir)
-    
-    print(f"\nFound {len(problematic)} problematic experiments:")
-    for p in problematic:
-        print(f"  - {p}")
-    
-    print(f"\nUsing {len(good_data)} good experiments:")
-    for d in good_data:
-        print(f"  - {d['filename']}")
-    
-    if not good_data:
-        print("ERROR: No good experiments found!")
-        return
-    
-    # Create representative curve
-    print("\nCreating representative curve...")
-    representative = create_representative_curve(good_data, T_ambient=T_ambient)
-    
     # Create figure
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, height_ratios=[2, 1])
-    
-    # Plot 1: Representative curve with individual experiments
-    colors = plt.cm.tab10(np.linspace(0, 1, len(good_data)))
-    
-    for i, data in enumerate(good_data):
-        label = data['filename'].replace('.txt', '')
-        ax1.plot(data['time'] / 60, data['temperature'], 
-                color=colors[i], linewidth=1, alpha=0.3, label=label)
-    
-    # Plot mean curve
-    ax1.plot(representative['time'] / 60, representative['mean_temperature'], 
-            'k-', linewidth=3, label='Mean (Representative)', zorder=10)
-    
-    # Plot median curve
-    ax1.plot(representative['time'] / 60, representative['median_temperature'], 
-            'b--', linewidth=2, alpha=0.7, label='Median', zorder=9)
-    
-    # Plot standard deviation band
-    ax1.fill_between(representative['time'] / 60,
-                     representative['mean_temperature'] - representative['std_temperature'],
-                     representative['mean_temperature'] + representative['std_temperature'],
-                     alpha=0.2, color='gray', label='±1 Std Dev')
-    
-    ax1.axhline(y=0, color='r', linestyle='--', alpha=0.5, linewidth=1.5, 
-               label='0°C (melting point)')
-    
-    ax1.set_xlabel('Time (minutes)', fontsize=12)
-    ax1.set_ylabel('Temperature (°C)', fontsize=12)
-    ax1.set_title(f'Representative Temperature Curve (n={representative["n_experiments"]} experiments)', 
-                 fontsize=14, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(loc='best', fontsize=8, ncol=2)
-    
-    # Plot 2: Standard deviation
-    ax2.plot(representative['time'] / 60, representative['std_temperature'], 
-            'r-', linewidth=2)
-    ax2.fill_between(representative['time'] / 60, 0, representative['std_temperature'],
-                    alpha=0.3, color='red')
-    ax2.set_xlabel('Time (minutes)', fontsize=12)
-    ax2.set_ylabel('Standard Deviation (°C)', fontsize=12)
-    ax2.set_title('Temperature Variability Across Experiments', fontsize=12)
-    ax2.grid(True, alpha=0.3)
-    
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Plot each case
+    for i, data in enumerate(loaded_data):
+        label = data['filename'].replace('.txt', '').replace('_', ' ')
+        time_min = data['time'] / 60
+        temp = data['temperature']
+
+        # Plot line
+        ax.plot(time_min, temp, color=colors[i], linewidth=2, label=label)
+
+    # Add 0°C reference line
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+
+    # Customize plot
+    ax.set_xlabel('Time (minutes)', fontsize=18, fontweight='bold')
+    ax.set_ylabel('Temperature (°C)', fontsize=18, fontweight='bold')
+    ax.set_title('Temperature Control Repeatability', fontsize=20, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=16, direction='in')
+    ax.grid(True, alpha=0.3)
+
+    # Make axis edges thicker
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+
+    # Set plot region to 1:1 aspect ratio (square box)
+    ax.set_box_aspect(1)
+
+    # Add legend outside plotting region
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=16, framealpha=0.9)
+
     plt.tight_layout()
-    
+
     # Save figure
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
-    output_file = output_path / 'representative_temperature_curve.png'
+    output_file = output_path / 'temperature_repeatability.png'
     fig.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"\nFigure saved to: {output_file}")
-    
-    # Also create a simpler version with just the representative curve
-    fig2, ax = plt.subplots(figsize=(10, 6))
-    
-    ax.plot(representative['time'] / 60, representative['mean_temperature'], 
-           'k-', linewidth=3, label='Representative Temperature')
-    ax.fill_between(representative['time'] / 60,
-                    representative['mean_temperature'] - representative['std_temperature'],
-                    representative['mean_temperature'] + representative['std_temperature'],
-                    alpha=0.3, color='gray', label='±1 Std Dev')
-    ax.axhline(y=0, color='r', linestyle='--', alpha=0.5, linewidth=1.5, 
-              label='0°C (melting point)')
-    
-    ax.set_xlabel('Time (minutes)', fontsize=12)
-    ax.set_ylabel('Temperature (°C)', fontsize=12)
-    ax.set_title(f'Representative Temperature Curve (n={representative["n_experiments"]} experiments)', 
-                fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='best', fontsize=11)
-    
-    plt.tight_layout()
-    
-    output_file2 = output_path / 'representative_temperature_simple.png'
-    fig2.savefig(output_file2, dpi=150, bbox_inches='tight')
-    print(f"Simple figure saved to: {output_file2}")
-    
-    # Save representative temperature data to file
-    data_file = output_path / 'representative_temperature_data.txt'
-    with open(data_file, 'w') as f:
-        f.write("Time (s)\tTime (min)\tTemperature (°C)\tStd Dev (°C)\n")
-        for i in range(len(representative['time'])):
-            f.write(f"{representative['time'][i]:.2f}\t"
-                   f"{representative['time'][i]/60:.4f}\t"
-                   f"{representative['mean_temperature'][i]:.4f}\t"
-                   f"{representative['std_temperature'][i]:.4f}\n")
-    print(f"Representative temperature data saved to: {data_file}")
-    
-    # Also save as CSV
-    data_file_csv = output_path / 'representative_temperature_data.csv'
-    with open(data_file_csv, 'w') as f:
-        f.write("Time_s,Time_min,Temperature_C,StdDev_C\n")
-        for i in range(len(representative['time'])):
-            f.write(f"{representative['time'][i]:.2f},"
-                   f"{representative['time'][i]/60:.4f},"
-                   f"{representative['mean_temperature'][i]:.4f},"
-                   f"{representative['std_temperature'][i]:.4f}\n")
-    print(f"Representative temperature data (CSV) saved to: {data_file_csv}")
-    
+
     # Print statistics
     print("\n" + "=" * 60)
-    print("Representative Curve Statistics:")
+    print("Statistics:")
     print("=" * 60)
-    print(f"Time range: {representative['time'][0]/60:.1f} to {representative['time'][-1]/60:.1f} minutes")
-    print(f"Temperature range: {np.min(representative['mean_temperature']):.2f} to {np.max(representative['mean_temperature']):.2f} °C")
-    print(f"Average std dev: {np.mean(representative['std_temperature']):.2f} °C")
-    print(f"Max std dev: {np.max(representative['std_temperature']):.2f} °C")
-    
-    return fig, fig2, representative
+    for data in loaded_data:
+        t = data['time']
+        temp = data['temperature']
+        print(f"\n{data['filename']}:")
+        print(f"  Duration: {t[-1]/60:.1f} minutes")
+        print(f"  T_initial: {temp[0]:.1f}°C")
+        print(f"  T_final: {temp[-1]:.1f}°C")
+        print(f"  T_range: {np.max(temp) - np.min(temp):.1f}°C")
+
+    return fig
+
+
+def load_frost_growth_data(filepath='exp_data/defrost_sloughing_experiment_data.csv'):
+    """
+    Load frost growth data from CSV and group by experimental condition.
+
+    Parameters:
+    -----------
+    filepath : str
+        Path to the CSV data file
+
+    Returns:
+    --------
+    dict : Keys are condition labels, values are dicts with 'time', 'thickness', 'porosity' arrays
+    """
+    filepath = Path(filepath)
+    conditions = {}
+
+    with open(filepath, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if not row.get('frosting time (min)', '').strip():
+                continue
+
+            try:
+                surface = row['Surface Type'].strip()
+                temp = int(float(row['Air Dry Bulb [C]']))
+                rh = int(float(row['RH']) * 100)
+                time_min = float(row['frosting time (min)'])
+                thickness = float(row['t (mm)'])
+                porosity = float(row['porosity (-)'])
+
+                # Create condition label
+                label = f"{surface} {temp}°C {rh}%RH"
+
+                if label not in conditions:
+                    conditions[label] = {
+                        'time': [],
+                        'thickness': [],
+                        'porosity': [],
+                        'surface': surface
+                    }
+
+                conditions[label]['time'].append(time_min)
+                conditions[label]['thickness'].append(thickness)
+                conditions[label]['porosity'].append(porosity)
+
+            except (ValueError, KeyError) as e:
+                continue
+
+    # Convert lists to sorted numpy arrays
+    for label in conditions:
+        # Sort by time
+        indices = np.argsort(conditions[label]['time'])
+        conditions[label]['time'] = np.array(conditions[label]['time'])[indices]
+        conditions[label]['thickness'] = np.array(conditions[label]['thickness'])[indices]
+        conditions[label]['porosity'] = np.array(conditions[label]['porosity'])[indices]
+
+    return conditions
+
+
+def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv',
+                      output_dir='figure', figsize=(10, 12)):
+    """
+    Plot frost thickness and porosity vs frosting time in two vertically stacked subplots.
+
+    Parameters:
+    -----------
+    data_file : str
+        Path to the CSV data file
+    output_dir : str
+        Directory to save the output figure
+    figsize : tuple
+        Figure size (width, height) in inches
+    """
+    print("=" * 60)
+    print("Plotting Frost Growth (Thickness & Porosity)")
+    print("=" * 60)
+
+    # Load data grouped by condition
+    conditions = load_frost_growth_data(data_file)
+    print(f"\nFound {len(conditions)} experimental conditions:")
+    for label in conditions:
+        print(f"  {label}: {len(conditions[label]['time'])} data points")
+
+    # Colors for each condition (5 conditions)
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+
+    # Create figure with 2 vertically stacked subplots sharing x-axis
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
+
+    # Markers for each condition
+    markers = ['o', 's', '^', 'D', 'v']
+
+    # Plot each condition
+    for i, (label, data) in enumerate(conditions.items()):
+        color = colors[i % len(colors)]
+        marker = markers[i % len(markers)]
+
+        # Top subplot: Solid line with markers for thickness
+        ax1.plot(data['time'], data['thickness'], color=color, linewidth=2,
+                 linestyle='-', marker=marker, markersize=8, label=label)
+
+        # Bottom subplot: Dashed line with markers for porosity
+        ax2.plot(data['time'], data['porosity'], color=color, linewidth=2,
+                 linestyle='--', marker=marker, markersize=8, label=label)
+
+    # Customize top subplot (thickness)
+    ax1.set_ylabel('Frost Thickness (mm)', fontsize=15, fontweight='bold')
+    ax1.tick_params(axis='both', labelsize=13, direction='in')
+    ax1.tick_params(axis='x', labelbottom=False)  # Remove x-tick labels from top plot
+    ax1.set_title('Frost Growth vs Frosting Time', fontsize=17, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+
+    # Make axis edges thicker for top subplot
+    for spine in ax1.spines.values():
+        spine.set_linewidth(2)
+
+    # Set aspect ratio y:x = 1:2 (width is 2x height)
+    ax1.set_box_aspect(0.5)
+
+    # Customize bottom subplot (porosity)
+    ax2.set_xlabel('Frosting Time (min)', fontsize=15, fontweight='bold')
+    ax2.set_ylabel('Porosity (-)', fontsize=15, fontweight='bold')
+    ax2.tick_params(axis='both', labelsize=13, direction='in')
+    ax2.grid(True, alpha=0.3)
+
+    # Make axis edges thicker for bottom subplot
+    for spine in ax2.spines.values():
+        spine.set_linewidth(2)
+
+    # Set aspect ratio y:x = 1:2 (width is 2x height)
+    ax2.set_box_aspect(0.5)
+
+    # Create legend (shared for both plots)
+    from matplotlib.lines import Line2D
+    legend_elements = []
+    for i, label in enumerate(conditions.keys()):
+        color = colors[i % len(colors)]
+        legend_elements.append(Line2D([0], [0], color=color, linewidth=2, label=label))
+    # Add line style indicators
+    legend_elements.append(Line2D([0], [0], color='gray', linewidth=2,
+                                  linestyle='-', label='— Thickness'))
+    legend_elements.append(Line2D([0], [0], color='gray', linewidth=2,
+                                  linestyle='--', label='-- Porosity'))
+
+    # Place legend outside on the right
+    ax1.legend(handles=legend_elements, bbox_to_anchor=(1.02, 1), loc='upper left',
+               fontsize=11, framealpha=0.9)
+
+    # Reduce space between subplots
+    plt.subplots_adjust(hspace=0.05)
+
+    plt.tight_layout()
+
+    # Save figure
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    output_file = output_path / 'frost_growth.png'
+    fig.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"\nFigure saved to: {output_file}")
+
+    return fig
 
 
 if __name__ == '__main__':
-    fig1, fig2, representative = plot_representative_temperature()
+    fig1 = plot_temperature_repeatability()
+    fig2 = plot_frost_growth()
     print("\nDone!")

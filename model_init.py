@@ -34,7 +34,7 @@ class DefrostModel:
             If None and surface_type is provided, will be set based on surface_type.
             Default: None
         surface_type : str, optional
-            Surface type identifier: '60deg' or '160deg'. If provided and contact angles
+            Surface type identifier: '60deg' or '140deg'. If provided and contact angles
             are None, will automatically assign corresponding contact angles.
             Default: None
         """
@@ -86,20 +86,20 @@ class DefrostModel:
         self.theta_60_receding = 60.0
         self.theta_60_advancing = 70.0
         
-        # 160° case (superhydrophobic): theta_R = 155°, theta_A = 160°
-        self.theta_160_receding = 155.0
-        self.theta_160_advancing = 160.0
+        # 140° case (superhydrophobic): theta_R = 135°, theta_A = 140°
+        self.theta_140_receding = 135.0
+        self.theta_140_advancing = 140.0
         
         # Assign contact angles based on surface_type if not explicitly provided
         if theta_receding is None and theta_advancing is None and surface_type is not None:
             # Normalize surface_type (handle variations like "60deg", "60deg_", etc.)
             surface_type_clean = surface_type.lower().strip()
-            # Check 160 first to avoid substring match ('60' is in '160')
-            if '160' in surface_type_clean or surface_type_clean == '160deg':
-                theta_receding = self.theta_160_receding
-                theta_advancing = self.theta_160_advancing
+            # Check 140 first to avoid substring match ('40' might appear elsewhere)
+            if '140' in surface_type_clean or surface_type_clean == '140deg':
+                theta_receding = self.theta_140_receding
+                theta_advancing = self.theta_140_advancing
                 if self.verbose:
-                    print(f"Surface type '{surface_type}' detected: Using 160° contact angles")
+                    print(f"Surface type '{surface_type}' detected: Using 140° contact angles")
                     print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
             elif '60' in surface_type_clean or surface_type_clean == '60deg':
                 theta_receding = self.theta_60_receding
@@ -109,7 +109,7 @@ class DefrostModel:
                     print(f"  theta_receding = {theta_receding}°, theta_advancing = {theta_advancing}°")
             else:
                 if self.verbose:
-                    print(f"Warning: Unknown surface_type '{surface_type}'. Valid values: '60deg', '160deg'")
+                    print(f"Warning: Unknown surface_type '{surface_type}'. Valid values: '60deg', '140deg'")
                     print(f"  Contact angles will not be set automatically.")
         
         # Surface retention properties
@@ -405,7 +405,7 @@ class DefrostModel:
     def set_initial_temperature(self, T_initial):
         """
         Set uniform initial temperature field and calculate enthalpy.
-        
+
         Parameters
         ----------
         T_initial : float
@@ -416,7 +416,65 @@ class DefrostModel:
         if self.verbose:
             print(f"  Initial temperature: {T_initial}°C")
             print(f"  Initial enthalpy: {self.H[0]:.2e} J/m³")
-        
+
+    def set_initial_temperature_steady_state(self, T_surface, T_ambient, h_conv):
+        """
+        Set initial temperature using steady-state heat conduction profile.
+
+        Before defrost starts, the frost layer is in thermal equilibrium with
+        the cold surface on one side and ambient air on the other. This method
+        calculates the realistic temperature gradient through the frost.
+
+        Parameters
+        ----------
+        T_surface : float
+            Surface (heated plate) temperature [°C] - typically from first data point
+        T_ambient : float
+            Ambient air temperature [°C]
+        h_conv : float
+            Air-side convective heat transfer coefficient [W/(m²·K)]
+        """
+        # Get effective thermal conductivity (use mean if varies by layer)
+        k_eff = np.mean(self.k)  # [W/(m·K)]
+
+        # Total frost thickness
+        L_frost = self.frost_thickness  # [m]
+
+        # Layer thickness
+        dx = self.dx[0]  # Assuming uniform layers [m]
+
+        # Calculate thermal resistances (per unit area)
+        R_frost = L_frost / k_eff  # [K·m²/W]
+        R_conv = 1.0 / h_conv      # [K·m²/W]
+        R_total = R_frost + R_conv # [K·m²/W]
+
+        # Calculate steady-state heat flux
+        q = (T_surface - T_ambient) / R_total  # [W/m²]
+
+        # Calculate frost-air interface temperature
+        T_frost_air = T_ambient + q / h_conv  # [°C]
+
+        # Calculate temperature at center of each layer
+        # Layer 0 is at the heated surface (x=0)
+        # Layer N-1 is at the frost-air interface (x=L_frost)
+        self.T = np.zeros(self.n_layers)
+        for i in range(self.n_layers):
+            x_i = (i + 0.5) * dx  # distance from heated surface to layer center
+            self.T[i] = T_surface - q * x_i / k_eff
+
+        # Calculate enthalpy for each layer
+        self._calculate_enthalpy()
+
+        if self.verbose:
+            print(f"  Steady-state initial temperature profile:")
+            print(f"    Surface temperature: {T_surface:.2f}°C")
+            print(f"    Ambient temperature: {T_ambient:.2f}°C")
+            print(f"    Frost-air interface: {T_frost_air:.2f}°C")
+            print(f"    Heat flux: {q:.2f} W/m²")
+            print(f"    Thermal resistance: R_frost={R_frost:.4f}, R_conv={R_conv:.4f} K·m²/W")
+            print(f"    Layer temperatures: T[0]={self.T[0]:.2f}°C (near surface), T[{self.n_layers-1}]={self.T[-1]:.2f}°C (near air)")
+            print(f"    Initial enthalpy range: {self.H[0]:.2e} to {self.H[-1]:.2e} J/m³")
+
     def _calculate_enthalpy(self):
         """
         Calculate volumetric enthalpy for each layer based on temperature and composition.
@@ -554,7 +612,7 @@ def initialize_model(n_layers=4, frost_thickness=0.005, porosity=0.9, T_initial=
     T_initial : float
         Initial temperature in °C
     surface_type : str, optional
-        Surface type identifier: '60deg' or '160deg'. If provided, will automatically
+        Surface type identifier: '60deg' or '140deg'. If provided, will automatically
         assign corresponding contact angles. Default: None
     verbose : bool, optional
         If True, print initialization messages. Default: True

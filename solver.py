@@ -104,7 +104,7 @@ class DefrostSolver:
         # Critical detachment (sloughing) parameters
         # Calibrated k values for different contact angles
         self.k_60 = 245.2220   # Retention coefficient for 60° contact angle
-        self.k_140 = 2300  # Retention coefficient for 140° contact angle
+        self.k_140 = 8000  # Retention coefficient for 140° contact angle
         
         # Calibrated f(alpha_water) function parameters
         # f(alpha_water) = A * log(B * alpha_water + e) + C
@@ -400,7 +400,7 @@ class DefrostSolver:
         
         # Update properties based on current state
         self.model.calculate_specific_heat()
-        self.model.calculate_thermal_conductivity()
+        self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
         
         # Step 1: Calculate heat fluxes (EXPLICIT: using T^t)
         # Note: Uses current temperatures self.model.T (T^t)
@@ -442,7 +442,7 @@ class DefrostSolver:
         
         # Step 7: Recalculate properties with new volume fractions and thicknesses
         self.model.calculate_specific_heat()
-        self.model.calculate_thermal_conductivity()
+        self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
         
         # Step 8: Calculate critical sloughing thickness and check if frost can survive
         sloughing_info = self._check_sloughing()
@@ -710,7 +710,7 @@ class DefrostSolver:
             
             # Recalculate properties
             self.model.calculate_specific_heat()
-            self.model.calculate_thermal_conductivity()
+            self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
             
             # Update temperature
             cp = self.model.cp[layer_idx]
@@ -802,7 +802,7 @@ class DefrostSolver:
             
             # Recalculate properties
             self.model.calculate_specific_heat()
-            self.model.calculate_thermal_conductivity()
+            self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
             
             # Temperature stays at melting point
             self.model.T[layer_idx] = self.model.T_melt
@@ -838,7 +838,7 @@ class DefrostSolver:
         
         # Recalculate properties
         self.model.calculate_specific_heat()
-        self.model.calculate_thermal_conductivity()
+        self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
     
     def _reset_melted_layer(self, layer_idx):
         """
@@ -992,7 +992,7 @@ class DefrostSolver:
                 
                 # Recalculate properties after volume fraction changes
                 self.model.calculate_specific_heat()
-                self.model.calculate_thermal_conductivity()
+                self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
                 
                 # Update temperature
                 cp = self.model.cp[layer_idx]
@@ -1019,7 +1019,7 @@ class DefrostSolver:
             
             # Recalculate properties after volume fraction changes
             self.model.calculate_specific_heat()
-            self.model.calculate_thermal_conductivity()
+            self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
             
             # Update temperature (stays at melting point in mushy zone, but update for consistency)
             self.model.T[layer_idx] = self.model.T_melt
@@ -1273,7 +1273,7 @@ class DefrostSolver:
                 
                 # Recalculate properties
                 self.model.calculate_specific_heat()
-                self.model.calculate_thermal_conductivity()
+                self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
                 
                 # Update temperature
                 cp = self.model.cp[layer_idx]
@@ -1313,7 +1313,7 @@ class DefrostSolver:
             
             # Recalculate properties
             self.model.calculate_specific_heat()
-            self.model.calculate_thermal_conductivity()
+            self.model.calculate_thermal_conductivity(begin_idx=(self.begin_idx if self.begin_idx is not None else 0))
             
             # Update temperature (stays at melting point in mushy zone)
             self.model.T[layer_idx] = self.model.T_melt
@@ -1969,9 +1969,10 @@ class DefrostSolver:
         # Calculate effective density
         rho_eff = self._calculate_effective_density()
         
-        # Calculate critical thickness
+        # Calculate critical thickness (offset: hydrophilic +0.0005, superhydrophobic -0.0003)
         if rho_eff > 0 and self.g > 0:
-            h_crit = (k * tau_base * f_water) / (rho_eff * self.g) + 0.0005
+            offset = 0.0005 if self.model.surface_type_classification == "hydrophilic" else (-0.0005 if self.model.surface_type_classification == "superhydrophobic" else 0.0)
+            h_crit = (k * tau_base * f_water) / (rho_eff * self.g) + offset
         else:
             h_crit = np.inf  # Invalid case
         

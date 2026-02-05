@@ -214,21 +214,29 @@ class DefrostModel:
         
         return self.cp
     
-    def calculate_thermal_conductivity(self):
+    def calculate_thermal_conductivity(self, begin_idx=0):
         """
         Calculate the effective thermal conductivity for each layer.
-        
+
         Based on the combined parallel-series model:
         k_eff = f k_p + (1 - f) k_s
-        
+
         where:
         k_p = α_ice k_ice + α_H2O k_H2O + α_air k_air  (parallel model)
         k_s = 1 / (α_ice / k_ice + α_H2O / k_H2O + α_air / k_air)  (series model)
         f = f_ini * (α_ice / α_ice,initial),  f_ini = 1/3
-        
+
         This function should be called at every time step as volume fractions
         change during the defrost process.
-        
+
+        Parameters
+        ----------
+        begin_idx : int, optional
+            Index of the first "frost" layer. For superhydrophobic surfaces, the
+            0.12 scaling is applied only to layers from the wall up to (but not
+            including) begin_idx; layers from begin_idx onward use the normal k.
+            Default 0 (no scaling when not provided).
+
         Returns
         -------
         numpy.ndarray
@@ -261,7 +269,12 @@ class DefrostModel:
         # Calculate effective thermal conductivity
         # k_eff = f * k_p + (1 - f) * k_s
         self.k = f * k_parallel + (1.0 - f) * k_series
-        
+
+        # Apply 0.12 factor for superhydrophobic only from wall to begin_idx
+        # (layers 0..begin_idx-1); from begin_idx onward use normal k
+        if self.surface_type_classification == "superhydrophobic" and begin_idx > 0:
+            self.k[:begin_idx+1] = self.k[:begin_idx+1] * 0.12
+
         return self.k
     
     def calculate_thermal_resistance(self):

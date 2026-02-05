@@ -1,8 +1,4 @@
-Time (HH:MM:SS) - Setpoint	Temperature (ºC) - Setpoint	Time (HH:MM:SS) - Sensor 1	Temperature (ºC) - Sensor 1	Time (HH:MM:SS) - Sensor 2	Temperature (ºC) - Sensor 2	Time (HH:MM:SS) - Power	          Power (%) - Power
-17:59:30	-20	17:59:30	-19.99	17:59:30	-97.1	17:59:30	-65
-17:59:31	-20	17:59:31	-19.99	17:59:31	-97.2	17:59:31	-65
-17:59:32	-20	17:59:32	-19.99	17:59:32	-97.2	17:59:32	-65
-17:59:33	-20	17:59:33	-19.99	17:59:33	-97.2	17:59:33	-64
+Time (HH:MM:SS) - Setpoint	Temperature (ï¿½C) - Setpoint	Time (HH:MM:SS) - Sensor 1	Temperature (ï¿½C) - Sensor 1	Time (HH:MM:SS) - Sensor 2	Temperature (ï¿½C) - Sensor 2	Time (HH:MM:SS) - Power	          Power (%) - Power
 17:59:34	-4	17:59:34	-19.99	17:59:34	-97.1	18:00:10	98
 17:59:35	-4	17:59:35	-19.99	17:59:35	-97.2	18:00:11	92
 17:59:36	-4	17:59:36	-20	17:59:36	-97.2	18:00:12	86

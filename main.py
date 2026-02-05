@@ -53,7 +53,7 @@ def enforce_non_decreasing_temperature(time, temperature):
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "60min_140deg_83%_12C.txt"
+    data_file = "45min_140deg_63%_12C.txt"
     # n_layers will be automatically calculated based on initial thickness and retention thickness
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed
@@ -276,6 +276,10 @@ def main():
         plt.title('Total Frost Layer Thickness vs Time', fontsize=14, fontweight='bold')
         plt.grid(True, alpha=0.3)
         plt.legend(fontsize=11)
+
+        # Set y-axis limits based on total frost thickness with 5% margin
+        y_max = np.max(h_total_plot) * 1000 * 1.05  # Convert to mm and add 5% margin
+        plt.ylim([0, y_max])
         plt.tight_layout()
         figure_path = figure_dir / f'{figure_prefix}_total_thickness_vs_time.png'
         plt.savefig(figure_path, dpi=150, bbox_inches='tight')

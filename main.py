@@ -50,6 +50,185 @@ def enforce_non_decreasing_temperature(time, temperature):
     return temperature_corrected, n_locked
 
 
+def run_simulation_with_params(data_file, frost_thickness=None, porosity=None,
+                                surface_type=None, T_ambient=None,
+                                method='explicit', dt_safety_factor=0.9,
+                                temperature_offset=0, verbose=True):
+    """
+    Run defrost simulation with specified parameters.
+
+    This function is designed to be called programmatically (e.g., by
+    find_sloughing_threshold.py) to run simulations with custom parameters.
+
+    Parameters
+    ----------
+    data_file : str
+        Temperature data file name (e.g., "90min_140deg_63%_12C.txt")
+    frost_thickness : float, optional
+        Initial frost thickness [m]. If None, uses experiment data.
+    porosity : float, optional
+        Initial frost porosity. If None, uses experiment data.
+    surface_type : str, optional
+        Surface type: 'Hydrophilic', 'Superhydrophobic', '60deg', '140deg'.
+        If None, extracted from data_file name.
+    T_ambient : float, optional
+        Ambient temperature [°C]. If None, extracted from data_file name.
+    method : str
+        Solver method: 'explicit' or 'implicit'
+    dt_safety_factor : float
+        Safety factor for time step calculation
+    temperature_offset : float
+        Offset to apply to temperature readings [°C]
+    verbose : bool
+        If True, print progress messages
+
+    Returns
+    -------
+    dict with keys:
+        'sloughing': bool - Whether sloughing occurred
+        'sloughing_time': float or None - Time when sloughing occurred [s]
+        'completely_melted': bool - Whether all ice melted without sloughing
+        'results': dict - Full simulation results
+        'frost_thickness': float - Frost thickness used [m]
+        'porosity': float - Porosity used
+    """
+    # Load temperature data
+    loader, time_raw, temperature_raw = load_defrost_data(data_file, verbose=verbose)
+
+    # Apply temperature offset
+    temperature_raw = temperature_raw + temperature_offset
+
+    # Get frost properties from experiment file
+    frost_props = get_frost_properties(data_file)
+
+    # Use provided values or fall back to experiment data
+    if frost_thickness is None:
+        if isinstance(frost_props, dict) and frost_props.get('thickness'):
+            frost_thickness = frost_props['thickness']
+        else:
+            raise ValueError(f"No frost_thickness provided and no experiment data for {data_file}")
+
+    if porosity is None:
+        if isinstance(frost_props, dict) and frost_props.get('porosity'):
+            porosity = frost_props['porosity']
+        else:
+            raise ValueError(f"No porosity provided and no experiment data for {data_file}")
+
+    # Determine surface type from filename if not provided
+    if surface_type is None:
+        name = Path(data_file).stem
+        parts = name.split('_')
+        if len(parts) > 1:
+            surface_type = parts[1]  # e.g., "60deg" or "140deg"
+
+    # Determine T_ambient from filename if not provided
+    if T_ambient is None:
+        case_params = parse_case_filename(data_file)
+        T_ambient = case_params.get('air_temp', 12.0)
+
+    # Determine contact angles from surface type
+    surface_type_clean = (surface_type or '').lower().strip()
+    if '140' in surface_type_clean or 'superhydrophobic' in surface_type_clean:
+        theta_receding = 135.0
+        theta_advancing = 140.0
+        contact_angle_str = '140deg'
+    else:
+        theta_receding = 60.0
+        theta_advancing = 70.0
+        contact_angle_str = '60deg'
+
+    # Calculate number of layers
+    n_layers = int(np.round(frost_thickness / 5e-5))
+    n_layers = max(1, n_layers)
+
+    # Calculate dt for explicit method
+    if method == 'explicit':
+        props = get_initial_frost_properties(porosity=porosity)
+        dt_max = calculate_max_stable_dt(
+            n_layers=n_layers,
+            frost_thickness=frost_thickness,
+            k_eff=props['k_eff'],
+            rho_eff=props['rho_eff'],
+            cp_eff=props['cp_eff'],
+            safety_factor=0.4
+        )
+        dt = dt_max * dt_safety_factor
+    else:
+        dt = 0.1
+
+    # Interpolate temperature data
+    time, temperature = interpolate_temperature(time_raw, temperature_raw, dt=dt, kind='linear')
+
+    # Lock temperature so it never reduces
+    temperature, _ = enforce_non_decreasing_temperature(time, temperature)
+
+    if verbose:
+        print(f"  Running simulation: thickness={frost_thickness*1000:.2f}mm, porosity={porosity:.3f}")
+
+    # Initialize model
+    model = initialize_model(
+        n_layers=n_layers,
+        frost_thickness=frost_thickness,
+        porosity=porosity,
+        T_initial=temperature[0],
+        surface_type=contact_angle_str,
+        verbose=False
+    )
+
+    # Create solver
+    h_conv = 1.5
+    if T_ambient is not None:
+        model.set_initial_temperature_steady_state(
+            T_surface=temperature[0],
+            T_ambient=T_ambient,
+            h_conv=h_conv
+        )
+
+    solver = DefrostSolver(model, dt=dt, method=method, h_conv=h_conv, T_ambient=T_ambient, verbose=False)
+
+    # Solve
+    results = solver.solve(time, temperature, save_history=True, history_save_interval=1.0)
+
+    # Check for sloughing
+    sloughing = False
+    sloughing_time = None
+    completely_melted = False
+
+    # Check solver's internal sloughing info
+    if hasattr(solver, '_latest_sloughing_info') and solver._latest_sloughing_info is not None:
+        if solver._latest_sloughing_info.get('sloughing', False):
+            sloughing = True
+            if results['time'] is not None and len(results['time']) > 0:
+                sloughing_time = results['time'][-1]
+
+    # Check results history
+    if not sloughing and results['sloughing'] is not None and len(results['sloughing']) > 0:
+        sloughing_indices = np.where(results['sloughing'] == True)[0]
+        if len(sloughing_indices) > 0:
+            sloughing = True
+            sloughing_time = results['time'][sloughing_indices[0]]
+
+    # Check if completely melted
+    if not sloughing and results['alpha_ice'] is not None:
+        final_alpha_ice = results['alpha_ice'][-1] if len(results['alpha_ice']) > 0 else None
+        if final_alpha_ice is not None:
+            total_ice = np.sum(final_alpha_ice)
+            if total_ice < 1e-6:
+                completely_melted = True
+
+    if hasattr(solver, '_all_layers_water') and solver._all_layers_water:
+        completely_melted = True
+
+    return {
+        'sloughing': sloughing,
+        'sloughing_time': sloughing_time,
+        'completely_melted': completely_melted,
+        'results': results,
+        'frost_thickness': frost_thickness,
+        'porosity': porosity,
+    }
+
+
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====

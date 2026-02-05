@@ -53,7 +53,7 @@ def enforce_non_decreasing_temperature(time, temperature):
 def main():
     """Main entry point for the dynamic defrost model."""
     # ===== User Parameters =====
-    data_file = "45min_140deg_63%_12C.txt"
+    data_file = "90min_140deg_63%_12C.txt"
     # n_layers will be automatically calculated based on initial thickness and retention thickness
     # dt will be automatically calculated based on n_layers for explicit methods
     # For implicit methods, you can set dt manually if needed

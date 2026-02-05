@@ -181,6 +181,89 @@ def plot_temperature_repeatability(data_dir='exp_data', output_dir='figure', fig
     return fig
 
 
+def plot_superhydrophobic_temperature_variation(data_dir='exp_data', output_dir='figure', figsize=(12, 8)):
+    """
+    Plot temperature vs time for each superhydrophobic (140deg) experiment only,
+    so each experiment's temperature variation with time is visible.
+
+    Parameters:
+    -----------
+    data_dir : str
+        Directory containing experimental data files
+    output_dir : str
+        Directory to save the output figure
+    figsize : tuple
+        Figure size (width, height) in inches
+    """
+    print("=" * 60)
+    print("Plotting Superhydrophobic Temperature Variation")
+    print("=" * 60)
+
+    data_path = Path(data_dir)
+    # Superhydrophobic experiments: filenames contain 140deg
+    all_txt = sorted(data_path.glob('*.txt'))
+    superhydrophobic_files = [f.name for f in all_txt if '140deg' in f.name]
+
+    if not superhydrophobic_files:
+        print("WARNING: No superhydrophobic (140deg) data files found.")
+        return None
+
+    print(f"\nFound {len(superhydrophobic_files)} superhydrophobic experiments:")
+    loaded_data = []
+    for case in superhydrophobic_files:
+        filepath = data_path / case
+        data = load_experimental_data(filepath)
+        loaded_data.append(data)
+        print(f"  {case} ({len(data['time'])} points)")
+
+    if not loaded_data:
+        print("ERROR: No data could be loaded!")
+        return None
+
+    # Colormap for many lines (one color per experiment)
+    n_cases = len(loaded_data)
+    colors = plt.cm.tab10(np.linspace(0, 1, max(n_cases, 10)))[:n_cases]
+    if n_cases > 10:
+        colors = plt.cm.tab20(np.linspace(0, 1, n_cases))
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, data in enumerate(loaded_data):
+        label = data['filename'].replace('.txt', '').replace('_', ' ')
+        time_min = data['time'] / 60
+        temp = data['temperature']
+        ax.plot(time_min, temp, color=colors[i], linewidth=2, label=label)
+
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax.set_xlabel('Time (minutes)', fontsize=18, fontweight='bold')
+    ax.set_ylabel('Temperature (°C)', fontsize=18, fontweight='bold')
+    ax.set_title('Superhydrophobic (140°) Experiments: Temperature vs Time', fontsize=20, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=16, direction='in')
+    ax.grid(True, alpha=0.3)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+    ax.set_box_aspect(1)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=11, framealpha=0.9)
+
+    plt.tight_layout()
+
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    output_file = output_path / 'temperature_superhydrophobic_variation.png'
+    fig.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"\nFigure saved to: {output_file}")
+
+    print("\n" + "=" * 60)
+    print("Superhydrophobic temperature statistics:")
+    print("=" * 60)
+    for data in loaded_data:
+        t = data['time']
+        temp = data['temperature']
+        print(f"  {data['filename']}: duration {t[-1]/60:.1f} min, T [{temp.min():.1f}, {temp.max():.1f}] °C")
+
+    return fig
+
+
 def load_frost_growth_data(filepath='exp_data/defrost_sloughing_experiment_data.csv'):
     """
     Load frost growth data from CSV and group by experimental condition.
@@ -346,5 +429,6 @@ def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv'
 
 if __name__ == '__main__':
     fig1 = plot_temperature_repeatability()
-    fig2 = plot_frost_growth()
+    fig2 = plot_superhydrophobic_temperature_variation()
+    fig3 = plot_frost_growth()
     print("\nDone!")

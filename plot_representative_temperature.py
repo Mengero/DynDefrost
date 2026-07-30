@@ -324,7 +324,7 @@ def load_frost_growth_data(filepath='exp_data/defrost_sloughing_experiment_data.
 
 
 def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv',
-                      output_dir='figure', figsize=(10, 12)):
+                      output_dir='figure', figsize=(10, 8)):
     """
     Plot frost thickness and porosity vs frosting time in two vertically stacked subplots.
 
@@ -412,10 +412,10 @@ def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv'
     ax1.legend(handles=legend_elements, bbox_to_anchor=(1.02, 1), loc='upper left',
                fontsize=11, framealpha=0.9)
 
-    # Reduce space between subplots
-    plt.subplots_adjust(hspace=0.05)
-
     plt.tight_layout()
+
+    # Reduce space between subplots (after tight_layout, which would otherwise override it)
+    fig.subplots_adjust(hspace=0.08)
 
     # Save figure
     output_path = Path(output_dir)

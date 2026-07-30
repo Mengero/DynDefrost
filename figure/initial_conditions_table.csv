@@ -1,0 +1,24 @@
+Case,Surface Type,Air Temp [°C],RH [%],Frosting Time [min],Thickness [mm],Porosity [-],Behavior
+1,Hydrophilic,12,83,10.0,2.41,0.977,Drain
+2,Hydrophilic,12,83,30.0,3.14,0.956,Drain
+3,Hydrophilic,12,83,55.0,3.4,0.886,Slough
+4,Hydrophilic,22,45,60.0,2.12,0.956,Drain
+5,Hydrophilic,22,45,90.0,2.51,0.923,Drain
+6,Hydrophilic,22,45,120.0,2.84,0.905,Slough
+7,Hydrophilic,22,45,150.0,3.04,0.895,Slough
+8,Hydrophilic,22,45,180.0,3.14,0.879,Slough
+9,Hydrophilic,22,55,60.0,2.51,0.92,Drain
+10,Hydrophilic,22,55,90.0,3.26,0.929,Slough
+11,Hydrophilic,22,55,120.0,3.65,0.868,Slough
+12,Hydrophilic,22,55,150.0,3.89,0.882,Slough
+13,Hydrophilic,22,55,180.0,4.09,0.855,Slough
+14,Superhydrophobic,12,63,10.0,1.28,0.991,Jump Off
+15,Superhydrophobic,12,63,20.0,1.8,0.969,Peel Off
+16,Superhydrophobic,12,63,30.0,2.08,0.966,Peel Off
+17,Superhydrophobic,12,63,45.0,2.18,0.942,Peel Off
+18,Superhydrophobic,12,63,90.0,2.26,0.896,Slough
+19,Superhydrophobic,12,83,10.0,1.3,0.938,Jump Off
+20,Superhydrophobic,12,83,15.0,2.46,0.931,Peel Off
+21,Superhydrophobic,12,83,35.0,3.44,0.929,Peel Off
+22,Superhydrophobic,12,83,60.0,4.52,0.917,Slough
+23,Superhydrophobic,12,83,90.0,4.7,0.909,Slough

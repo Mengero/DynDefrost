@@ -323,6 +323,87 @@ def load_frost_growth_data(filepath='exp_data/defrost_sloughing_experiment_data.
     return conditions
 
 
+def export_initial_conditions_table(data_file='exp_data/defrost_sloughing_experiment_data.csv',
+                                    output_dir='figure'):
+    """
+    Export a table of all defrost initial conditions, one row per experiment.
+
+    Writes both a CSV and a Markdown version to the output directory, listing
+    surface type, air temperature, relative humidity, frosting time, frost
+    thickness, porosity, and observed defrost behavior.
+
+    Parameters:
+    -----------
+    data_file : str
+        Path to the CSV data file
+    output_dir : str
+        Directory to save the output tables
+
+    Returns:
+    --------
+    list of dict : One entry per experiment, in table order
+    """
+    print("=" * 60)
+    print("Exporting Defrost Initial Conditions Table")
+    print("=" * 60)
+
+    rows = []
+    with open(Path(data_file), 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if not row.get('frosting time (min)', '').strip():
+                continue
+            try:
+                rows.append({
+                    'Surface Type': row['Surface Type'].strip(),
+                    'Air Temp [°C]': int(float(row['Air Dry Bulb [C]'])),
+                    'RH [%]': int(float(row['RH']) * 100),
+                    'Frosting Time [min]': float(row['frosting time (min)']),
+                    'Thickness [mm]': float(row['t (mm)']),
+                    'Porosity [-]': float(row['porosity (-)']),
+                    'Behavior': row['Behavior'].strip(),
+                })
+            except (ValueError, KeyError):
+                continue
+
+    # Sort by surface type, then condition, then frosting time
+    rows.sort(key=lambda r: (r['Surface Type'], r['Air Temp [°C]'],
+                             r['RH [%]'], r['Frosting Time [min]']))
+    rows = [{'Case': i, **row} for i, row in enumerate(rows, start=1)]
+
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    headers = list(rows[0].keys())
+
+    csv_file = output_path / 'initial_conditions_table.csv'
+    with open(csv_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\nTable saved to: {csv_file}")
+
+    def fmt(row, key):
+        value = row[key]
+        if key == 'Frosting Time [min]':
+            return f"{value:g}"
+        if key == 'Thickness [mm]':
+            return f"{value:.2f}"
+        if key == 'Porosity [-]':
+            return f"{value:.3f}"
+        return str(value)
+
+    md_file = output_path / 'initial_conditions_table.md'
+    with open(md_file, 'w', encoding='utf-8') as f:
+        f.write('| ' + ' | '.join(headers) + ' |\n')
+        f.write('|' + '|'.join(['---'] * len(headers)) + '|\n')
+        for row in rows:
+            f.write('| ' + ' | '.join(fmt(row, key) for key in headers) + ' |\n')
+    print(f"Table saved to: {md_file}")
+    print(f"Total: {len(rows)} experiments")
+
+    return rows
+
+
 def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv',
                       output_dir='figure', figsize=(9, 7)):
     """
@@ -412,4 +493,5 @@ if __name__ == '__main__':
     fig1 = plot_temperature_repeatability()
     fig2 = plot_superhydrophobic_temperature_variation()
     fig3 = plot_frost_growth()
+    export_initial_conditions_table()
     print("\nDone!")

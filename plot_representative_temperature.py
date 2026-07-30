@@ -358,13 +358,13 @@ def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv'
     fig, ax = plt.subplots(figsize=figsize)
 
     # Shared color scale for frosting time across all conditions.
-    # Single-hue light->dark blue ramp (darker = longer frosting); the palest
-    # 25% of Blues is cut so short-time points don't wash out on white.
+    # Light->dark YlGnBu ramp (darker = longer frosting); the palest 15%
+    # is cut so short-time points don't wash out on white.
     from matplotlib.colors import LinearSegmentedColormap
     all_times = np.concatenate([conditions[label]['time'] for label in conditions])
     norm = plt.Normalize(all_times.min(), all_times.max())
     cmap = LinearSegmentedColormap.from_list(
-        'Blues_trunc', plt.cm.Blues(np.linspace(0.25, 1.0, 256)))
+        'YlGnBu_trunc', plt.cm.YlGnBu(np.linspace(0.15, 1.0, 256)))
 
     # Plot each condition: one marker shape per condition, color = frosting time
     for i, (label, data) in enumerate(conditions.items()):

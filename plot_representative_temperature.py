@@ -324,9 +324,14 @@ def load_frost_growth_data(filepath='exp_data/defrost_sloughing_experiment_data.
 
 
 def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv',
-                      output_dir='figure', figsize=(10, 8)):
+                      output_dir='figure', figsize=(9, 7)):
     """
-    Plot frost thickness and porosity vs frosting time in two vertically stacked subplots.
+    Plot the defrost initial conditions as a porosity vs thickness map.
+
+    Each experiment is one point in the (thickness, porosity) state space used
+    to initialize the defrost model. Marker shape identifies the experimental
+    condition and marker color encodes the frosting time, so separate
+    experiments cannot be misread as one continuous frosting measurement.
 
     Parameters:
     -----------
@@ -338,7 +343,7 @@ def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv'
         Figure size (width, height) in inches
     """
     print("=" * 60)
-    print("Plotting Frost Growth (Thickness & Porosity)")
+    print("Plotting Defrost Initial Conditions (Thickness & Porosity)")
     print("=" * 60)
 
     # Load data grouped by condition
@@ -347,75 +352,46 @@ def plot_frost_growth(data_file='exp_data/defrost_sloughing_experiment_data.csv'
     for label in conditions:
         print(f"  {label}: {len(conditions[label]['time'])} data points")
 
-    # Colors for each condition (5 conditions)
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-
-    # Create figure with 2 vertically stacked subplots sharing x-axis
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
-
     # Markers for each condition
     markers = ['o', 's', '^', 'D', 'v']
 
-    # Plot each condition
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Shared color scale for frosting time across all conditions
+    all_times = np.concatenate([conditions[label]['time'] for label in conditions])
+    norm = plt.Normalize(all_times.min(), all_times.max())
+    cmap = plt.cm.viridis
+
+    # Plot each condition: one marker shape per condition, color = frosting time
     for i, (label, data) in enumerate(conditions.items()):
-        color = colors[i % len(colors)]
         marker = markers[i % len(markers)]
+        ax.scatter(data['thickness'], data['porosity'], c=data['time'],
+                   cmap=cmap, norm=norm, marker=marker, s=110,
+                   edgecolors='black', linewidths=0.8, zorder=3, label=label)
 
-        # Top subplot: Solid line with markers for thickness
-        ax1.plot(data['time'], data['thickness'], color=color, linewidth=2,
-                 linestyle='-', marker=marker, markersize=8, label=label)
+    cbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=0.02)
+    cbar.set_label('Frosting Time (min)', fontsize=15, fontweight='bold')
+    cbar.ax.tick_params(labelsize=13)
 
-        # Bottom subplot: Dashed line with markers for porosity
-        ax2.plot(data['time'], data['porosity'], color=color, linewidth=2,
-                 linestyle='--', marker=marker, markersize=8, label=label)
+    ax.set_xlabel('Frost Thickness (mm)', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Porosity (-)', fontsize=15, fontweight='bold')
+    ax.set_title('Defrost Initial Conditions', fontsize=17, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=13, direction='in')
+    ax.grid(True, alpha=0.3)
 
-    # Customize top subplot (thickness)
-    ax1.set_ylabel('Frost Thickness (mm)', fontsize=15, fontweight='bold')
-    ax1.tick_params(axis='both', labelsize=13, direction='in')
-    ax1.tick_params(axis='x', labelbottom=False)  # Remove x-tick labels from top plot
-    ax1.set_title('Frost Growth vs Frosting Time', fontsize=17, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-
-    # Make axis edges thicker for top subplot
-    for spine in ax1.spines.values():
+    # Make axis edges thicker
+    for spine in ax.spines.values():
         spine.set_linewidth(2)
 
-    # Set aspect ratio y:x = 1:2 (width is 2x height)
-    ax1.set_box_aspect(0.5)
+    ax.set_box_aspect(1)
 
-    # Customize bottom subplot (porosity)
-    ax2.set_xlabel('Frosting Time (min)', fontsize=15, fontweight='bold')
-    ax2.set_ylabel('Porosity (-)', fontsize=15, fontweight='bold')
-    ax2.tick_params(axis='both', labelsize=13, direction='in')
-    ax2.grid(True, alpha=0.3)
-
-    # Make axis edges thicker for bottom subplot
-    for spine in ax2.spines.values():
-        spine.set_linewidth(2)
-
-    # Set aspect ratio y:x = 1:2 (width is 2x height)
-    ax2.set_box_aspect(0.5)
-
-    # Create legend (shared for both plots)
-    from matplotlib.lines import Line2D
-    legend_elements = []
-    for i, label in enumerate(conditions.keys()):
-        color = colors[i % len(colors)]
-        legend_elements.append(Line2D([0], [0], color=color, linewidth=2, label=label))
-    # Add line style indicators
-    legend_elements.append(Line2D([0], [0], color='gray', linewidth=2,
-                                  linestyle='-', label='— Thickness'))
-    legend_elements.append(Line2D([0], [0], color='gray', linewidth=2,
-                                  linestyle='--', label='-- Porosity'))
-
-    # Place legend outside on the right
-    ax1.legend(handles=legend_elements, bbox_to_anchor=(1.02, 1), loc='upper left',
-               fontsize=11, framealpha=0.9)
+    # Legend shows marker shapes only; neutral fill since color encodes time
+    legend = ax.legend(fontsize=11, framealpha=0.9, loc='upper right')
+    for handle in legend.legend_handles:
+        handle.set_facecolor('gray')
+        handle.set_edgecolor('black')
 
     plt.tight_layout()
-
-    # Reduce space between subplots (after tight_layout, which would otherwise override it)
-    fig.subplots_adjust(hspace=0.08)
 
     # Save figure
     output_path = Path(output_dir)

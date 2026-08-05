@@ -296,6 +296,7 @@ def _plot_condition_pairs(quantity, ylabel, output_file, output_dir='figure',
     for spine in ax.spines.values():
         spine.set_linewidth(2)
     ax.set_box_aspect(1)
+    ax.set_ylim(bottom=0)
 
     # Legend: condition colors plus line-style indicators (no box)
     from matplotlib.lines import Line2D
@@ -424,6 +425,7 @@ def _plot_single_condition(label, cases, quantity, ylabel,
     for spine in ax.spines.values():
         spine.set_linewidth(2)
     ax.set_box_aspect(1)
+    ax.set_ylim(bottom=0)
 
     ax.legend(fontsize=14, frameon=False, loc='best')
 

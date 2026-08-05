@@ -176,7 +176,7 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
             # reaches the threshold
             if hist['sloughing']:
                 ax.plot(time_min[-1], h_total_mm[-1], marker='o', markersize=9,
-                        markerfacecolor='none', markeredgecolor=color,
+                        markerfacecolor='white', markeredgecolor=color,
                         markeredgewidth=2, linestyle='None', zorder=5)
 
         print(f"  {case}: initial {h_total_mm[0]:.2f} mm, "
@@ -206,10 +206,6 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
     handles, labels = ax1.get_legend_handles_labels()
     handles.append(Line2D([0], [0], color='gray', linewidth=1.5, linestyle='--'))
     labels.append('Critical sloughing threshold')
-    handles.append(Line2D([0], [0], marker='o', markersize=8,
-                          markerfacecolor='none', markeredgecolor='gray',
-                          markeredgewidth=2, linestyle='None'))
-    labels.append('Sloughing event')
     ax2.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
                fontsize=14, frameon=False)
 
@@ -287,7 +283,7 @@ def _plot_condition_pairs(quantity, ylabel, output_file, output_dir='figure',
                 finite = np.where(np.isfinite(values))[0]
                 if len(finite) > 0:
                     ax.plot(time_min[finite[-1]], values[finite[-1]],
-                            marker='o', markersize=9, markerfacecolor='none',
+                            marker='o', markersize=9, markerfacecolor='white',
                             markeredgecolor=color, markeredgewidth=2,
                             linestyle='None', zorder=5)
             outcome = 'sloughs' if hist['sloughing'] else 'no sloughing'
@@ -308,10 +304,6 @@ def _plot_condition_pairs(quantity, ylabel, output_file, output_dir='figure',
     labels.append('Dynamic defrosting')
     handles.append(Line2D([0], [0], color='gray', linewidth=2.5, linestyle='--'))
     labels.append('No dynamic defrosting')
-    handles.append(Line2D([0], [0], marker='o', markersize=8,
-                          markerfacecolor='none', markeredgecolor='gray',
-                          markeredgewidth=2, linestyle='None'))
-    labels.append('Sloughing event')
     ax.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
               fontsize=14, frameon=False)
 
@@ -418,7 +410,7 @@ def _plot_single_condition(label, cases, quantity, ylabel,
             finite = np.where(np.isfinite(values))[0]
             if len(finite) > 0:
                 ax.plot(time_min[finite[-1]], values[finite[-1]], marker='o',
-                        markersize=9, markerfacecolor='none',
+                        markersize=9, markerfacecolor='white',
                         markeredgecolor=color, markeredgewidth=2,
                         linestyle='None', zorder=5)
         print(f"  {case}: {outcome}s" if outcome == 'slough'
@@ -433,13 +425,7 @@ def _plot_single_condition(label, cases, quantity, ylabel,
         spine.set_linewidth(2)
     ax.set_box_aspect(1)
 
-    from matplotlib.lines import Line2D
-    handles, labels = ax.get_legend_handles_labels()
-    handles.append(Line2D([0], [0], marker='o', markersize=8,
-                          markerfacecolor='none', markeredgecolor='gray',
-                          markeredgewidth=2, linestyle='None'))
-    labels.append('Sloughing event')
-    ax.legend(handles, labels, fontsize=14, frameon=False, loc='best')
+    ax.legend(fontsize=14, frameon=False, loc='best')
 
     plt.tight_layout()
 

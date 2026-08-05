@@ -68,7 +68,14 @@ def get_case_history(data_file, results_dir='sim_results/defrost_histories'):
         }
 
     print(f"  Simulating {data_file} (no saved results)...")
-    sim = run_simulation_with_params(data_file, verbose=False)
+    try:
+        sim = run_simulation_with_params(data_file, verbose=False)
+    except Exception as exc:
+        # Some cases crash the explicit solver at the default time step
+        # (non-adjacent active layers); a smaller step avoids it
+        print(f"  {data_file} failed ({exc}); retrying with dt_safety_factor=0.5")
+        sim = run_simulation_with_params(data_file, dt_safety_factor=0.5,
+                                         verbose=False)
     results = sim['results']
 
     time = np.asarray(results['time'], dtype=float)
@@ -345,23 +352,49 @@ def plot_wall_water_fraction(output_dir='figure'):
         'wall_water_fraction.png', output_dir)
 
 
+# All experimental cases per ambient condition / surface wettability
+CONDITION_CASES = {
+    'Hydrophilic 22°C 45%RH': [
+        '60min_60deg_45%_22C.txt', '90min_60deg_45%_22C.txt',
+        '120min_60deg_45%_22C.txt', '150min_60deg_45%_22C.txt',
+        '180min_60deg_45%_22C.txt'],
+    'Hydrophilic 22°C 55%RH': [
+        '60min_60deg_55%_22C.txt', '90min_60deg_55%_22C.txt',
+        '120min_60deg_55%_22C.txt', '150min_60deg_55%_22C.txt',
+        '180min_60deg_55%_22C.txt'],
+    'Hydrophilic 12°C 83%RH': [
+        '10min_60deg_83%_12C.txt', '30min_60deg_83%_12C.txt',
+        '55min_60deg_83%_12C.txt'],
+    'Superhydrophobic 12°C 63%RH': [
+        '10min_140deg_63%_12C.txt', '20min_140deg_63%_12C.txt',
+        '30min_140deg_63%_12C.txt', '45min_140deg_63%_12C.txt',
+        '90min_140deg_63%_12C.txt'],
+    'Superhydrophobic 12°C 83%RH': [
+        '10min_140deg_83%_12C.txt', '15min_140deg_83%_12C.txt',
+        '35min_140deg_83%_12C.txt', '60min_140deg_83%_12C.txt',
+        '90min_140deg_83%_12C.txt'],
+}
+
+
 def _condition_slug(label):
     """Turn a condition label into a file-name-friendly slug."""
     return (label.replace('°C', 'C').replace('%RH', 'RH')
             .replace(' ', '_').lower())
 
 
-def _plot_single_condition(label, case_static, case_dynamic, quantity, ylabel,
-                           color, output_dir='figure', figsize=(9, 7)):
+def _plot_single_condition(label, cases, quantity, ylabel,
+                           output_dir='figure', figsize=(9, 7)):
     """
-    Plot one quantity for one ambient condition: the case without dynamic
-    defrosting (dashed) and the case with it (solid, hollow circle at the
-    sloughing event).
+    Plot one quantity for one ambient condition, one curve per case:
+    cases without dynamic defrosting dashed, cases with it solid with a
+    hollow circle at the sloughing event. Color identifies the case.
     """
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+
     fig, ax = plt.subplots(figsize=figsize)
 
-    for case, style, kind in ((case_static, '--', 'no dynamic defrosting'),
-                              (case_dynamic, '-', 'dynamic defrosting')):
+    for i, case in enumerate(cases):
+        color = colors[i % len(colors)]
         try:
             hist = get_case_history(case)
         except Exception as exc:
@@ -375,9 +408,11 @@ def _plot_single_condition(label, case_static, case_dynamic, quantity, ylabel,
         if quantity == 'h_total':
             values = values * 1000  # m -> mm
         time_min = hist['time'] / 60
+        style = '-' if hist['sloughing'] else '--'
+        outcome = 'slough' if hist['sloughing'] else 'drain'
         frosting_time = Path(case).stem.split('_')[0].replace('min', '')
         ax.plot(time_min, values, color=color, linewidth=2.5, linestyle=style,
-                label=f"{frosting_time} min frosting — {kind}")
+                label=f"{frosting_time} min frosting ({outcome})")
         if hist['sloughing']:
             # Mark the last finite sample (the final row can be NaN)
             finite = np.where(np.isfinite(values))[0]
@@ -386,8 +421,8 @@ def _plot_single_condition(label, case_static, case_dynamic, quantity, ylabel,
                         markersize=9, markerfacecolor='none',
                         markeredgecolor=color, markeredgewidth=2,
                         linestyle='None', zorder=5)
-        outcome = 'sloughs' if hist['sloughing'] else 'no sloughing'
-        print(f"  {case}: {outcome}")
+        print(f"  {case}: {outcome}s" if outcome == 'slough'
+              else f"  {case}: no sloughing")
 
     ax.set_xlabel('Defrost Time (min)', fontsize=18, fontweight='bold')
     ax.set_ylabel(ylabel, fontsize=18, fontweight='bold')
@@ -422,24 +457,23 @@ def _plot_single_condition(label, case_static, case_dynamic, quantity, ylabel,
 def plot_per_condition_figures(output_dir='figure'):
     """
     Generate one figure per ambient condition / surface wettability for both
-    the frost thickness and the wall-layer water volume fraction, each with
-    the dynamic (solid) and no-dynamic (dashed) defrosting cases.
+    the frost thickness and the wall-layer water volume fraction, with all
+    experimental cases of that condition (sloughing cases solid, others
+    dashed).
     """
     print("=" * 60)
     print("Plotting Per-Condition Defrost Figures")
     print("=" * 60)
 
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    for i, (label, case_static, case_dynamic) in enumerate(CONDITION_CASE_PAIRS):
-        color = colors[i % len(colors)]
+    for label, cases in CONDITION_CASES.items():
         print(f"\n{label}:")
-        _plot_single_condition(label, case_static, case_dynamic,
+        _plot_single_condition(label, cases,
                                'h_total', 'Frost Thickness (mm)',
-                               color, output_dir)
-        _plot_single_condition(label, case_static, case_dynamic,
+                               output_dir)
+        _plot_single_condition(label, cases,
                                'alpha_water_wall',
                                'Water Volume Fraction at Wall Layer (-)',
-                               color, output_dir)
+                               output_dir)
 
 
 if __name__ == '__main__':

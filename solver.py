@@ -8,7 +8,6 @@ The solver updates enthalpy based on heat flux, then updates temperature
 according to enthalpy zones (solid, mushy, liquid).
 """
 
-from re import T
 import numpy as np
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve

@@ -54,12 +54,15 @@ def get_case_history(data_file, results_dir='sim_results/defrost_histories'):
     if results_file.exists():
         with open(results_file, 'r', encoding='utf-8') as f:
             header = f.readline().strip().lstrip('# ')
+            columns = f.readline().strip().split(',')
         meta = dict(item.split('=') for item in header.split(','))
         data = np.loadtxt(results_file, delimiter=',', skiprows=2)
         return {
             'time': data[:, 0],
             'h_total': data[:, 1],
             'h_crit': data[:, 2],
+            # Older result files predate the wall-layer water fraction column
+            'alpha_water_wall': data[:, 3] if len(columns) > 3 else None,
             'sloughing': meta['sloughing'] == 'True',
             'sloughing_time': float(meta['sloughing_time']),
         }
@@ -68,19 +71,36 @@ def get_case_history(data_file, results_dir='sim_results/defrost_histories'):
     sim = run_simulation_with_params(data_file, verbose=False)
     results = sim['results']
 
+    time = np.asarray(results['time'], dtype=float)
+
+    # Water volume fraction of the layer next to the wall (heated surface).
+    # Layer 0 faces the air, so the wall side is the highest-index layer that
+    # still exists (layers at the wall melt away first as defrost proceeds).
+    alpha_water = np.asarray(results['alpha_water'], dtype=float)
+    dx = np.asarray(results['dx'], dtype=float)
+    n_steps = min(len(time), alpha_water.shape[0], dx.shape[0])
+    alpha_water_wall = np.full(len(time), np.nan)
+    for t in range(n_steps):
+        existing = np.where(dx[t] > 1e-12)[0]
+        if len(existing) > 0:
+            alpha_water_wall[t] = alpha_water[t, existing[-1]]
+
     history = {
-        'time': np.asarray(results['time'], dtype=float),
+        'time': time,
         'h_total': np.asarray(results['h_total'], dtype=float),
         'h_crit': np.asarray(results['h_crit'], dtype=float),
+        'alpha_water_wall': alpha_water_wall,
         'sloughing': bool(sim['sloughing']),
         'sloughing_time': float(sim['sloughing_time']) if sim['sloughing_time'] is not None else np.nan,
     }
     with open(results_file, 'w', encoding='utf-8') as f:
         f.write(f"# sloughing={history['sloughing']},"
                 f"sloughing_time={history['sloughing_time']}\n")
-        f.write("time_s,h_total_m,h_crit_m\n")
+        f.write("time_s,h_total_m,h_crit_m,alpha_water_wall\n")
         np.savetxt(f, np.column_stack([history['time'], history['h_total'],
-                                       history['h_crit']]), delimiter=',')
+                                       history['h_crit'],
+                                       history['alpha_water_wall']]),
+                   delimiter=',')
     print(f"  Results saved to {results_file}")
     return history
 
@@ -164,11 +184,11 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
     ax1.axhspan(0, max_thickness_mm * 1.25, color='gray', alpha=0.12, zorder=0)
 
     fig.suptitle('Frost Thickness During Defrost (Hydrophilic, 22°C 45%RH)',
-                 fontsize=17, fontweight='bold')
+                 fontsize=19, fontweight='bold')
     for ax in (ax1, ax2):
-        ax.set_xlabel('Defrost Time (min)', fontsize=15, fontweight='bold')
-        ax.set_ylabel('Frost Thickness (mm)', fontsize=15, fontweight='bold')
-        ax.tick_params(axis='both', labelsize=13, direction='in')
+        ax.set_xlabel('Defrost Time (min)', fontsize=18, fontweight='bold')
+        ax.set_ylabel('Frost Thickness (mm)', fontsize=18, fontweight='bold')
+        ax.tick_params(axis='both', labelsize=16, direction='in')
         ax.grid(True, alpha=0.3)
         for spine in ax.spines.values():
             spine.set_linewidth(2)
@@ -184,7 +204,7 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
                           markeredgewidth=2, linestyle='None'))
     labels.append('Sloughing event')
     ax2.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
-               fontsize=12, frameon=False)
+               fontsize=14, frameon=False)
 
     plt.tight_layout()
 
@@ -200,6 +220,129 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
     return fig
 
 
+# One representative case pair per ambient condition / surface wettability:
+# (condition label, case without dynamic defrosting, case with dynamic defrosting)
+CONDITION_CASE_PAIRS = [
+    ('Hydrophilic 22°C 45%RH', '90min_60deg_45%_22C.txt', '120min_60deg_45%_22C.txt'),
+    ('Hydrophilic 22°C 55%RH', '60min_60deg_55%_22C.txt', '120min_60deg_55%_22C.txt'),
+    ('Hydrophilic 12°C 83%RH', '30min_60deg_83%_12C.txt', '55min_60deg_83%_12C.txt'),
+    ('Superhydrophobic 12°C 63%RH', '45min_140deg_63%_12C.txt', '90min_140deg_63%_12C.txt'),
+    ('Superhydrophobic 12°C 83%RH', '35min_140deg_83%_12C.txt', '60min_140deg_83%_12C.txt'),
+]
+
+
+def _plot_condition_pairs(quantity, ylabel, output_file, output_dir='figure',
+                          figsize=(10, 8)):
+    """
+    Shared plotting routine for the per-condition case pair figures.
+
+    For each ambient condition / surface wettability, plot one case without
+    dynamic defrosting (dashed) and one with dynamic defrosting (solid, with
+    a hollow circle at the sloughing event). Color identifies the condition.
+
+    Parameters
+    ----------
+    quantity : str
+        History key to plot ('h_total' [m -> plotted in mm] or 'alpha_water_wall')
+    ylabel : str
+        Y-axis label
+    output_file : str
+        Output figure file name
+    output_dir : str
+        Directory to save the output figure
+    figsize : tuple
+        Figure size (width, height) in inches
+    """
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, (label, case_static, case_dynamic) in enumerate(CONDITION_CASE_PAIRS):
+        color = colors[i % len(colors)]
+        for case, style in ((case_static, '--'), (case_dynamic, '-')):
+            try:
+                hist = get_case_history(case)
+            except Exception as exc:
+                print(f"  WARNING: {case} could not be simulated ({exc}); skipped")
+                continue
+            values = hist[quantity]
+            if values is None:
+                print(f"  WARNING: {case} has no saved '{quantity}' data; "
+                      f"delete its CSV to re-simulate")
+                continue
+            if quantity == 'h_total':
+                values = values * 1000  # m -> mm
+            time_min = hist['time'] / 60
+            ax.plot(time_min, values, color=color, linewidth=2.5,
+                    linestyle=style, label=label if style == '-' else None)
+            if hist['sloughing']:
+                ax.plot(time_min[-1], values[-1], marker='o', markersize=9,
+                        markerfacecolor='none', markeredgecolor=color,
+                        markeredgewidth=2, linestyle='None', zorder=5)
+            outcome = 'sloughs' if hist['sloughing'] else 'no sloughing'
+            print(f"  {case}: {outcome}")
+
+    ax.set_xlabel('Defrost Time (min)', fontsize=18, fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=18, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=16, direction='in')
+    ax.grid(True, alpha=0.3)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+    ax.set_box_aspect(1)
+
+    # Legend: condition colors plus line-style indicators (no box)
+    from matplotlib.lines import Line2D
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color='gray', linewidth=2.5, linestyle='-'))
+    labels.append('Dynamic defrosting')
+    handles.append(Line2D([0], [0], color='gray', linewidth=2.5, linestyle='--'))
+    labels.append('No dynamic defrosting')
+    handles.append(Line2D([0], [0], marker='o', markersize=8,
+                          markerfacecolor='none', markeredgecolor='gray',
+                          markeredgewidth=2, linestyle='None'))
+    labels.append('Sloughing event')
+    ax.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
+              fontsize=14, frameon=False)
+
+    plt.tight_layout()
+
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    output_file = output_path / output_file
+    fig.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"\nFigure saved to: {output_file}")
+
+    return fig
+
+
+def plot_thickness_by_condition(output_dir='figure'):
+    """
+    Plot frost thickness during defrost for each ambient condition / surface
+    wettability: one case without and one with dynamic defrosting.
+    """
+    print("=" * 60)
+    print("Plotting Frost Thickness by Condition (dynamic vs no dynamic)")
+    print("=" * 60)
+    return _plot_condition_pairs(
+        'h_total', 'Frost Thickness (mm)',
+        'defrost_thickness_by_condition.png', output_dir)
+
+
+def plot_wall_water_fraction(output_dir='figure'):
+    """
+    Plot the water volume fraction of the layer next to the wall (heated
+    surface) during defrost for the same case pairs.
+    """
+    print("=" * 60)
+    print("Plotting Wall-Layer Water Volume Fraction")
+    print("=" * 60)
+    return _plot_condition_pairs(
+        'alpha_water_wall', 'Water Volume Fraction at Wall Layer (-)',
+        'wall_water_fraction.png', output_dir)
+
+
 if __name__ == '__main__':
     plot_defrost_thickness_comparison()
+    plot_thickness_by_condition()
+    plot_wall_water_fraction()
     print("\nDone!")

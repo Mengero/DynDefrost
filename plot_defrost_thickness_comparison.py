@@ -276,9 +276,13 @@ def _plot_condition_pairs(quantity, ylabel, output_file, output_dir='figure',
             ax.plot(time_min, values, color=color, linewidth=2.5,
                     linestyle=style, label=label if style == '-' else None)
             if hist['sloughing']:
-                ax.plot(time_min[-1], values[-1], marker='o', markersize=9,
-                        markerfacecolor='none', markeredgecolor=color,
-                        markeredgewidth=2, linestyle='None', zorder=5)
+                # Mark the last finite sample (the final row can be NaN)
+                finite = np.where(np.isfinite(values))[0]
+                if len(finite) > 0:
+                    ax.plot(time_min[finite[-1]], values[finite[-1]],
+                            marker='o', markersize=9, markerfacecolor='none',
+                            markeredgecolor=color, markeredgewidth=2,
+                            linestyle='None', zorder=5)
             outcome = 'sloughs' if hist['sloughing'] else 'no sloughing'
             print(f"  {case}: {outcome}")
 
@@ -341,8 +345,106 @@ def plot_wall_water_fraction(output_dir='figure'):
         'wall_water_fraction.png', output_dir)
 
 
+def _condition_slug(label):
+    """Turn a condition label into a file-name-friendly slug."""
+    return (label.replace('°C', 'C').replace('%RH', 'RH')
+            .replace(' ', '_').lower())
+
+
+def _plot_single_condition(label, case_static, case_dynamic, quantity, ylabel,
+                           color, output_dir='figure', figsize=(9, 7)):
+    """
+    Plot one quantity for one ambient condition: the case without dynamic
+    defrosting (dashed) and the case with it (solid, hollow circle at the
+    sloughing event).
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for case, style, kind in ((case_static, '--', 'no dynamic defrosting'),
+                              (case_dynamic, '-', 'dynamic defrosting')):
+        try:
+            hist = get_case_history(case)
+        except Exception as exc:
+            print(f"  WARNING: {case} could not be simulated ({exc}); skipped")
+            continue
+        values = hist[quantity]
+        if values is None:
+            print(f"  WARNING: {case} has no saved '{quantity}' data; "
+                  f"delete its CSV to re-simulate")
+            continue
+        if quantity == 'h_total':
+            values = values * 1000  # m -> mm
+        time_min = hist['time'] / 60
+        frosting_time = Path(case).stem.split('_')[0].replace('min', '')
+        ax.plot(time_min, values, color=color, linewidth=2.5, linestyle=style,
+                label=f"{frosting_time} min frosting — {kind}")
+        if hist['sloughing']:
+            # Mark the last finite sample (the final row can be NaN)
+            finite = np.where(np.isfinite(values))[0]
+            if len(finite) > 0:
+                ax.plot(time_min[finite[-1]], values[finite[-1]], marker='o',
+                        markersize=9, markerfacecolor='none',
+                        markeredgecolor=color, markeredgewidth=2,
+                        linestyle='None', zorder=5)
+        outcome = 'sloughs' if hist['sloughing'] else 'no sloughing'
+        print(f"  {case}: {outcome}")
+
+    ax.set_xlabel('Defrost Time (min)', fontsize=18, fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=18, fontweight='bold')
+    ax.set_title(label, fontsize=19, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=16, direction='in')
+    ax.grid(True, alpha=0.3)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+    ax.set_box_aspect(1)
+
+    from matplotlib.lines import Line2D
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], marker='o', markersize=8,
+                          markerfacecolor='none', markeredgecolor='gray',
+                          markeredgewidth=2, linestyle='None'))
+    labels.append('Sloughing event')
+    ax.legend(handles, labels, fontsize=14, frameon=False, loc='best')
+
+    plt.tight_layout()
+
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    prefix = 'defrost_thickness' if quantity == 'h_total' else 'wall_water_fraction'
+    output_file = output_path / f"{prefix}_{_condition_slug(label)}.png"
+    fig.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"  Figure saved to: {output_file}")
+    plt.close(fig)
+
+    return fig
+
+
+def plot_per_condition_figures(output_dir='figure'):
+    """
+    Generate one figure per ambient condition / surface wettability for both
+    the frost thickness and the wall-layer water volume fraction, each with
+    the dynamic (solid) and no-dynamic (dashed) defrosting cases.
+    """
+    print("=" * 60)
+    print("Plotting Per-Condition Defrost Figures")
+    print("=" * 60)
+
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    for i, (label, case_static, case_dynamic) in enumerate(CONDITION_CASE_PAIRS):
+        color = colors[i % len(colors)]
+        print(f"\n{label}:")
+        _plot_single_condition(label, case_static, case_dynamic,
+                               'h_total', 'Frost Thickness (mm)',
+                               color, output_dir)
+        _plot_single_condition(label, case_static, case_dynamic,
+                               'alpha_water_wall',
+                               'Water Volume Fraction at Wall Layer (-)',
+                               color, output_dir)
+
+
 if __name__ == '__main__':
     plot_defrost_thickness_comparison()
     plot_thickness_by_condition()
     plot_wall_water_fraction()
+    plot_per_condition_figures()
     print("\nDone!")

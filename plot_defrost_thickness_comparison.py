@@ -148,9 +148,9 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
             # Mark the sloughing event (hollow circle) where thickness
             # reaches the threshold
             if hist['sloughing']:
-                ax.plot(time_min[-1], h_total_mm[-1], marker='o', markersize=13,
+                ax.plot(time_min[-1], h_total_mm[-1], marker='o', markersize=9,
                         markerfacecolor='none', markeredgecolor=color,
-                        markeredgewidth=2.5, linestyle='None', zorder=5)
+                        markeredgewidth=2, linestyle='None', zorder=5)
 
         print(f"  {case}: initial {h_total_mm[0]:.2f} mm, "
               f"{'sloughs at ' + format(time_min[-1], '.2f') + ' min' if hist['sloughing'] else 'drains'}")
@@ -179,14 +179,17 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
     handles, labels = ax1.get_legend_handles_labels()
     handles.append(Line2D([0], [0], color='gray', linewidth=1.5, linestyle='--'))
     labels.append('Critical sloughing threshold')
-    handles.append(Line2D([0], [0], marker='o', markersize=11,
+    handles.append(Line2D([0], [0], marker='o', markersize=8,
                           markerfacecolor='none', markeredgecolor='gray',
-                          markeredgewidth=2.5, linestyle='None'))
+                          markeredgewidth=2, linestyle='None'))
     labels.append('Sloughing event')
     ax2.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
                fontsize=12, frameon=False)
 
     plt.tight_layout()
+
+    # Add horizontal space so the right panel's y-label clears the left panel
+    fig.subplots_adjust(wspace=0.35)
 
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)

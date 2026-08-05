@@ -85,10 +85,17 @@ def get_case_history(data_file, results_dir='sim_results/defrost_histories'):
     return history
 
 
-def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(10, 7)):
+def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(10, 8)):
     """
     Plot total frost thickness vs defrost time for several cases, with the
     critical sloughing thickness threshold and sloughing events marked.
+
+    Two vertically stacked panels:
+    (a) full view — thickness together with the complete critical sloughing
+        threshold curves, whose pre-melting values are an order of magnitude
+        larger than the frost thickness;
+    (b) zoom on the frost thickness range, where the threshold curves cross
+        the thickness curves at the sloughing events.
 
     Parameters
     ----------
@@ -112,9 +119,10 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
 
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
     max_thickness_mm = 0.0
+    max_crit_mm = 0.0
     n_slough_marked = 0
     for i, case in enumerate(cases):
         hist = histories[case]
@@ -123,59 +131,79 @@ def plot_defrost_thickness_comparison(cases=None, output_dir='figure', figsize=(
         h_total_mm = hist['h_total'] * 1000
         h_crit_mm = hist['h_crit'] * 1000
         max_thickness_mm = max(max_thickness_mm, np.nanmax(h_total_mm))
+        max_crit_mm = max(max_crit_mm, np.nanmax(h_crit_mm[np.isfinite(h_crit_mm)]))
 
         frosting_time = Path(case).stem.split('_')[0].replace('min', '')
         outcome = 'slough' if hist['sloughing'] else 'drain'
         label = f"{frosting_time} min frosting ({outcome})"
 
-        # Frost thickness history (solid)
-        ax.plot(time_min, h_total_mm, color=color, linewidth=2.5, label=label)
+        for ax in (ax1, ax2):
+            # Frost thickness history (solid)
+            ax.plot(time_min, h_total_mm, color=color, linewidth=2.5,
+                    label=label if ax is ax1 else None)
 
-        # Critical sloughing threshold history (dashed, same color)
-        ax.plot(time_min, h_crit_mm, color=color, linewidth=1.5,
-                linestyle='--', alpha=0.7)
+            # Critical sloughing threshold history (dashed, same color)
+            ax.plot(time_min, h_crit_mm, color=color, linewidth=1.5,
+                    linestyle='--', alpha=0.7)
 
-        # Mark the sloughing event where thickness reaches the threshold
+            # Mark the sloughing event where thickness reaches the threshold
+            if hist['sloughing']:
+                ax.plot(time_min[-1], h_total_mm[-1], marker='*', markersize=22,
+                        color=color, markeredgecolor='black', markeredgewidth=1.2,
+                        zorder=5)
+
+        # Annotate sloughing only in the zoom panel; alternate label placement
+        # so annotations of nearby events don't overlap
         if hist['sloughing']:
-            ax.plot(time_min[-1], h_total_mm[-1], marker='*', markersize=22,
-                    color=color, markeredgecolor='black', markeredgewidth=1.2,
-                    zorder=5)
-            # Alternate label placement so annotations of nearby events don't overlap
             offset, align = ((-16, 8), 'right') if n_slough_marked % 2 == 0 else ((14, -22), 'left')
-            ax.annotate('Sloughing', (time_min[-1], h_total_mm[-1]),
-                        textcoords='offset points', xytext=offset, ha=align,
-                        fontsize=13, fontweight='bold', color=color)
+            ax2.annotate('Sloughing', (time_min[-1], h_total_mm[-1]),
+                         textcoords='offset points', xytext=offset, ha=align,
+                         fontsize=13, fontweight='bold', color=color)
             n_slough_marked += 1
 
         print(f"  {case}: initial {h_total_mm[0]:.2f} mm, "
               f"{'sloughs at ' + format(time_min[-1], '.2f') + ' min' if hist['sloughing'] else 'drains'}")
 
-    # Clamp y-axis to the data: h_crit is very large before melt water appears
-    ax.set_ylim(0, max_thickness_mm * 1.25)
+    # Panel (a): full view including the large pre-melting threshold values
+    ax1.set_ylim(0, max_crit_mm * 1.05)
+    # Panel (b): zoom on the frost thickness range
+    ax2.set_ylim(0, max_thickness_mm * 1.25)
 
-    ax.set_xlabel('Defrost Time (min)', fontsize=15, fontweight='bold')
-    ax.set_ylabel('Frost Thickness (mm)', fontsize=15, fontweight='bold')
-    ax.set_title('Frost Thickness During Defrost\n(Hydrophilic, 22°C 45%RH)',
-                 fontsize=17, fontweight='bold')
-    ax.tick_params(axis='both', labelsize=13, direction='in')
-    ax.grid(True, alpha=0.3)
+    # Indicate the zoomed region of panel (b) in panel (a)
+    ax1.axhspan(0, max_thickness_mm * 1.25, color='gray', alpha=0.12, zorder=0)
+    ax1.annotate('zoom region (b)', (0.99, 0.02), xycoords='axes fraction',
+                 ha='right', va='bottom', fontsize=12, color='dimgray')
 
-    for spine in ax.spines.values():
-        spine.set_linewidth(2)
+    ax1.set_title('Frost Thickness During Defrost\n(Hydrophilic, 22°C 45%RH)',
+                  fontsize=17, fontweight='bold')
+    ax2.set_xlabel('Defrost Time (min)', fontsize=15, fontweight='bold')
+    for ax, panel in ((ax1, '(a)'), (ax2, '(b)')):
+        ax.set_ylabel('Frost Thickness (mm)', fontsize=15, fontweight='bold')
+        ax.tick_params(axis='both', labelsize=13, direction='in')
+        ax.grid(True, alpha=0.3)
+        for spine in ax.spines.values():
+            spine.set_linewidth(2)
+        ax.set_box_aspect(0.5)
+        ax.annotate(panel, (0.02, 0.94), xycoords='axes fraction',
+                    fontsize=15, fontweight='bold', va='top')
 
-    ax.set_box_aspect(1)
-
-    # Legend: case lines plus line-style indicators
+    # Legend: case lines plus line-style indicators (shared, outside right)
     from matplotlib.lines import Line2D
-    handles, labels = ax.get_legend_handles_labels()
+    handles, labels = ax1.get_legend_handles_labels()
     handles.append(Line2D([0], [0], color='gray', linewidth=2.5, linestyle='-'))
     labels.append('Frost thickness')
     handles.append(Line2D([0], [0], color='gray', linewidth=1.5, linestyle='--'))
     labels.append('Critical sloughing threshold')
-    ax.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
-              fontsize=12, framealpha=0.9)
+    handles.append(Line2D([0], [0], marker='*', markersize=15, color='gray',
+                          markeredgecolor='black', linestyle='None'))
+    labels.append('Sloughing event')
+    ax1.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left',
+               fontsize=12, framealpha=0.9)
 
     plt.tight_layout()
+
+    # Reduce space between subplots (after tight_layout, which would otherwise override it)
+    fig.subplots_adjust(hspace=0.08)
 
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)

@@ -426,6 +426,10 @@ def _plot_single_condition(label, cases, quantity, ylabel,
         spine.set_linewidth(2)
     ax.set_box_aspect(1)
     ax.set_ylim(bottom=0)
+    # Uniform one-decimal y ticks so all per-condition figures render with
+    # identical dimensions (tick label width affects the tight bounding box)
+    from matplotlib.ticker import FormatStrFormatter
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
 
     ax.legend(fontsize=14, frameon=False, loc='best')
 

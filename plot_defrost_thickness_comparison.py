@@ -427,7 +427,7 @@ def _draw_condition_panel(ax, label, cases, quantity, legend_loc='best'):
     # Two columns keep the thickness legends short so they clear the lowest
     # curve; the wall-water legends sit in empty space and stay single-column
     n_cols_legend = 2 if quantity == 'h_total' else 1
-    ax.legend(fontsize=17, frameon=False, loc=legend_loc, ncol=n_cols_legend,
+    ax.legend(fontsize=15, frameon=False, loc=legend_loc, ncol=n_cols_legend,
               columnspacing=1.0, handletextpad=0.5)
 
 

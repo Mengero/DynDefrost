@@ -375,16 +375,13 @@ def _condition_slug(label):
             .replace(' ', '_').lower())
 
 
-def _plot_single_condition(label, cases, quantity, ylabel,
-                           output_dir='figure', figsize=(9, 7)):
+def _draw_condition_panel(ax, label, cases, quantity, legend_loc='best'):
     """
-    Plot one quantity for one ambient condition, one curve per case:
+    Draw one ambient condition's curves onto an axes, one curve per case:
     cases without dynamic defrosting dashed, cases with it solid with a
-    hollow circle at the sloughing event. Color identifies the case.
+    white-filled circle at the sloughing event. Color identifies the case.
     """
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-
-    fig, ax = plt.subplots(figsize=figsize)
 
     for i, case in enumerate(cases):
         color = colors[i % len(colors)]
@@ -404,43 +401,75 @@ def _plot_single_condition(label, cases, quantity, ylabel,
         style = '-' if hist['sloughing'] else '--'
         outcome = 'slough' if hist['sloughing'] else 'drain'
         frosting_time = Path(case).stem.split('_')[0].replace('min', '')
-        ax.plot(time_min, values, color=color, linewidth=2.5, linestyle=style,
-                label=f"{frosting_time} min frosting ({outcome})")
+        ax.plot(time_min, values, color=color, linewidth=3, linestyle=style,
+                label=f"{frosting_time} min ({outcome})")
         if hist['sloughing']:
             # Mark the last finite sample (the final row can be NaN)
             finite = np.where(np.isfinite(values))[0]
             if len(finite) > 0:
                 ax.plot(time_min[finite[-1]], values[finite[-1]], marker='o',
-                        markersize=9, markerfacecolor='white',
-                        markeredgecolor=color, markeredgewidth=2,
+                        markersize=11, markerfacecolor='white',
+                        markeredgecolor=color, markeredgewidth=2.5,
                         linestyle='None', zorder=5)
         print(f"  {case}: {outcome}s" if outcome == 'slough'
               else f"  {case}: no sloughing")
 
-    ax.set_xlabel('Defrost Time (min)', fontsize=18, fontweight='bold')
-    ax.set_ylabel(ylabel, fontsize=18, fontweight='bold')
-    ax.set_title(label, fontsize=19, fontweight='bold')
-    ax.tick_params(axis='both', labelsize=16, direction='in')
+    ax.set_title(label, fontsize=23, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=20, direction='in')
     ax.grid(True, alpha=0.3)
     for spine in ax.spines.values():
         spine.set_linewidth(2)
     ax.set_box_aspect(1)
     ax.set_ylim(bottom=0)
-    # Uniform one-decimal y ticks so all per-condition figures render with
-    # identical dimensions (tick label width affects the tight bounding box)
+    # Uniform one-decimal y ticks so panels align visually
     from matplotlib.ticker import FormatStrFormatter
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+    # Two columns keep the thickness legends short so they clear the lowest
+    # curve; the wall-water legends sit in empty space and stay single-column
+    n_cols_legend = 2 if quantity == 'h_total' else 1
+    ax.legend(fontsize=17, frameon=False, loc=legend_loc, ncol=n_cols_legend,
+              columnspacing=1.0, handletextpad=0.5)
 
-    ax.legend(fontsize=14, frameon=False, loc='best')
+
+def _plot_combined_condition_figure(quantity, ylabel, output_file,
+                                    output_dir='figure', figsize=(21, 13)):
+    """
+    One paper-ready figure with a panel per ambient condition (2 rows x 3
+    columns, last cell unused), all experimental cases per panel.
+    """
+    n_conditions = len(CONDITION_CASES)
+    n_cols = 3
+    n_rows = 2
+
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=figsize)
+    axs = axs.ravel()
+
+    legend_loc = 'lower left' if quantity == 'h_total' else 'upper left'
+    for ax, (label, cases) in zip(axs, CONDITION_CASES.items()):
+        print(f"\n{label}:")
+        _draw_condition_panel(ax, label, cases, quantity, legend_loc)
+
+    # Hide unused cells
+    for ax in axs[n_conditions:]:
+        ax.set_visible(False)
+
+    # Axis labels: y on left column, x on the lowest visible panel per column
+    for row in range(n_rows):
+        axs[row * n_cols].set_ylabel(ylabel, fontsize=23, fontweight='bold')
+    for col in range(n_cols):
+        visible = [row * n_cols + col for row in range(n_rows)
+                   if row * n_cols + col < n_conditions]
+        if visible:
+            axs[visible[-1]].set_xlabel('Defrost Time (min)',
+                                        fontsize=23, fontweight='bold')
 
     plt.tight_layout()
 
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
-    prefix = 'defrost_thickness' if quantity == 'h_total' else 'wall_water_fraction'
-    output_file = output_path / f"{prefix}_{_condition_slug(label)}.png"
+    output_file = output_path / output_file
     fig.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"  Figure saved to: {output_file}")
+    print(f"\nFigure saved to: {output_file}")
     plt.close(fig)
 
     return fig
@@ -448,24 +477,17 @@ def _plot_single_condition(label, cases, quantity, ylabel,
 
 def plot_per_condition_figures(output_dir='figure'):
     """
-    Generate one figure per ambient condition / surface wettability for both
-    the frost thickness and the wall-layer water volume fraction, with all
-    experimental cases of that condition (sloughing cases solid, others
-    dashed).
+    Generate the paper figure: frost thickness during defrost, one panel per
+    ambient condition containing all experimental cases (sloughing cases
+    solid, others dashed).
     """
     print("=" * 60)
-    print("Plotting Per-Condition Defrost Figures")
+    print("Plotting Combined Per-Condition Defrost Figure")
     print("=" * 60)
 
-    for label, cases in CONDITION_CASES.items():
-        print(f"\n{label}:")
-        _plot_single_condition(label, cases,
-                               'h_total', 'Frost Thickness (mm)',
-                               output_dir)
-        _plot_single_condition(label, cases,
-                               'alpha_water_wall',
-                               'Water Volume Fraction at Wall Layer (-)',
-                               output_dir)
+    _plot_combined_condition_figure(
+        'h_total', 'Frost Thickness (mm)',
+        'defrost_thickness_all_conditions.png', output_dir)
 
 
 if __name__ == '__main__':

@@ -455,13 +455,13 @@ def _plot_combined_condition_figure(quantity, ylabel, output_file,
 
     # Axis labels: y on left column, x on the lowest visible panel per column
     for row in range(n_rows):
-        axs[row * n_cols].set_ylabel(ylabel, fontsize=23, fontweight='bold')
+        axs[row * n_cols].set_ylabel(ylabel, fontsize=20, fontweight='bold')
     for col in range(n_cols):
         visible = [row * n_cols + col for row in range(n_rows)
                    if row * n_cols + col < n_conditions]
         if visible:
             axs[visible[-1]].set_xlabel('Defrost Time (min)',
-                                        fontsize=23, fontweight='bold')
+                                        fontsize=20, fontweight='bold')
 
     plt.tight_layout()
 

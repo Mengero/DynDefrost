@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Four-stage defrost schematic (editable starter).
+  Structure: one <g> per stage panel; shared colors/patterns in <defs>.
+  Open in Inkscape / Illustrator / Affinity Designer to edit.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1590" height="690" viewBox="0 0 1590 690" font-family="Helvetica, Arial, sans-serif">
+
+  <defs>
+    <!-- Air: light near the frost, deeper orange toward the right -->
+    <linearGradient id="airGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbe3c6"/>
+      <stop offset="1" stop-color="#f2ad7b"/>
+    </linearGradient>
+
+    <!-- Porous frost: pale blue with ice speckles -->
+    <pattern id="frostPat" width="28" height="28" patternUnits="userSpaceOnUse">
+      <rect width="28" height="28" fill="#ddeef6"/>
+      <ellipse cx="6" cy="7" rx="4" ry="2.5" fill="#ffffff" transform="rotate(20 6 7)"/>
+      <ellipse cx="19" cy="4" rx="3" ry="2" fill="#bcdcec" transform="rotate(-15 19 4)"/>
+      <ellipse cx="14" cy="16" rx="4.5" ry="2.5" fill="#cde7f2" transform="rotate(35 14 16)"/>
+      <ellipse cx="23" cy="22" rx="3" ry="2" fill="#ffffff" transform="rotate(-30 23 22)"/>
+      <ellipse cx="4" cy="23" rx="3" ry="1.8" fill="#bcdcec" transform="rotate(10 4 23)"/>
+    </pattern>
+
+    <!-- Red wavy heat-flux arrow, pointing right; reuse with <use>, mirror with scale(-1,1) -->
+    <g id="wavyArrowR">
+      <path d="M0,0 q6,-7 12,0 t12,0 t12,0 t12,0" stroke="#e01f1f" stroke-width="4"
+            fill="none" stroke-linecap="round"/>
+      <polygon points="48,-8 63,0 48,8" fill="#e01f1f"/>
+    </g>
+  </defs>
+
+  <!-- ======================= STAGE 1: INITIAL ======================= -->
+  <g id="stage1" transform="translate(10,10)">
+    <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
+    <path id="frost1" fill="url(#frostPat)" stroke="#a9cede" stroke-width="1.5"
+          d="M95,0 L238,0 C246,40 232,80 240,120 C248,160 231,200 239,240
+             C247,280 233,320 241,360 C249,400 232,440 240,480
+             C246,515 234,550 240,580 L95,580 Z"/>
+    <rect id="wall1" x="0" y="0" width="95" height="580" fill="#9aa08f" stroke="#6f7465" stroke-width="1.5"/>
+    <rect x="0" y="0" width="370" height="580" fill="none" stroke="#555555" stroke-width="1.5"/>
+
+    <!-- heat flux: wall side (3 clusters) -->
+    <use xlink:href="#wavyArrowR" x="16" y="110"/><use xlink:href="#wavyArrowR" x="16" y="145"/><use xlink:href="#wavyArrowR" x="16" y="180"/>
+    <use xlink:href="#wavyArrowR" x="16" y="280"/><use xlink:href="#wavyArrowR" x="16" y="315"/><use xlink:href="#wavyArrowR" x="16" y="350"/>
+    <use xlink:href="#wavyArrowR" x="16" y="450"/><use xlink:href="#wavyArrowR" x="16" y="485"/><use xlink:href="#wavyArrowR" x="16" y="520"/>
+    <!-- heat flux: air side (middle cluster, pointing left) -->
+    <use xlink:href="#wavyArrowR" transform="translate(352,280) scale(-1,1)"/>
+    <use xlink:href="#wavyArrowR" transform="translate(352,315) scale(-1,1)"/>
+    <use xlink:href="#wavyArrowR" transform="translate(352,350) scale(-1,1)"/>
+
+    <text x="47" y="42" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Surface</text>
+    <text x="47" y="66" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Wall</text>
+    <text x="168" y="42" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Porous</text>
+    <text x="168" y="66" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Frost</text>
+    <text x="168" y="300" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Porous</text>
+    <text x="168" y="324" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Frost</text>
+    <text x="312" y="48" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Air</text>
+
+    <text x="185" y="625" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Stage 1:</text>
+    <text x="185" y="657" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Initial Stage</text>
+  </g>
+
+  <!-- =================== STAGE 2: MELTING &amp; SOAKING =================== -->
+  <g id="stage2" transform="translate(410,10)">
+    <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
+    <path id="frost2" fill="url(#frostPat)" stroke="#a9cede" stroke-width="1.5"
+          d="M95,0 L238,0 C246,40 232,80 240,120 C248,160 231,200 239,240
+             C247,280 233,320 241,360 C249,400 232,440 240,480
+             C246,515 234,550 240,580 L95,580 Z"/>
+    <!-- meltwater pockets inside the frost -->
+    <g id="pockets2" fill="#8fc3e0" opacity="0.85">
+      <ellipse cx="150" cy="130" rx="6" ry="3.5" transform="rotate(25 150 130)"/>
+      <ellipse cx="195" cy="180" rx="5" ry="3" transform="rotate(-20 195 180)"/>
+      <ellipse cx="135" cy="250" rx="5.5" ry="3" transform="rotate(15 135 250)"/>
+      <ellipse cx="205" cy="330" rx="6" ry="3.5" transform="rotate(-30 205 330)"/>
+      <ellipse cx="160" cy="420" rx="5" ry="3" transform="rotate(20 160 420)"/>
+      <ellipse cx="200" cy="500" rx="5.5" ry="3" transform="rotate(-15 200 500)"/>
+    </g>
+    <!-- meltwater films: wall side (straight) and air side (follows frost edge) -->
+    <path id="filmWall2" d="M101,0 L101,580" stroke="#74b3d8" stroke-width="13" fill="none"/>
+    <path id="filmAir2" fill="none" stroke="#74b3d8" stroke-width="13"
+          d="M244,0 C252,40 238,80 246,120 C254,160 237,200 245,240
+             C253,280 239,320 247,360 C255,400 238,440 246,480
+             C252,515 240,550 246,580"/>
+    <rect id="wall2" x="0" y="0" width="95" height="580" fill="#9aa08f" stroke="#6f7465" stroke-width="1.5"/>
+    <rect x="0" y="0" width="370" height="580" fill="none" stroke="#555555" stroke-width="1.5"/>
+
+    <use xlink:href="#wavyArrowR" x="16" y="110"/><use xlink:href="#wavyArrowR" x="16" y="145"/><use xlink:href="#wavyArrowR" x="16" y="180"/>
+    <use xlink:href="#wavyArrowR" x="16" y="280"/><use xlink:href="#wavyArrowR" x="16" y="315"/><use xlink:href="#wavyArrowR" x="16" y="350"/>
+    <use xlink:href="#wavyArrowR" x="16" y="450"/><use xlink:href="#wavyArrowR" x="16" y="485"/><use xlink:href="#wavyArrowR" x="16" y="520"/>
+    <use xlink:href="#wavyArrowR" transform="translate(352,280) scale(-1,1)"/>
+    <use xlink:href="#wavyArrowR" transform="translate(352,315) scale(-1,1)"/>
+    <use xlink:href="#wavyArrowR" transform="translate(352,350) scale(-1,1)"/>
+
+    <text x="47" y="42" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Surface</text>
+    <text x="47" y="66" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Wall</text>
+    <text x="168" y="42" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Porous</text>
+    <text x="168" y="66" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Frost</text>
+    <text x="168" y="300" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Porous</text>
+    <text x="168" y="324" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Frost</text>
+    <text x="312" y="48" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Air</text>
+
+    <!-- callouts -->
+    <g id="calloutTop2" stroke="#111111" stroke-width="2.5">
+      <line x1="253" y1="118" x2="285" y2="118"/>
+    </g>
+    <text x="290" y="112" font-size="19" font-weight="bold" fill="#111111">Melted</text>
+    <text x="290" y="134" font-size="19" font-weight="bold" fill="#111111">Water</text>
+    <g id="calloutBottom2" stroke="#111111" stroke-width="2.5">
+      <line x1="108" y1="492" x2="255" y2="492"/>
+    </g>
+    <text x="262" y="486" font-size="19" font-weight="bold" fill="#111111">Melted</text>
+    <text x="262" y="508" font-size="19" font-weight="bold" fill="#111111">Water</text>
+
+    <text x="185" y="625" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Stage 2:</text>
+    <text x="185" y="657" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Melting &amp; Soaking</text>
+  </g>
+
+  <!-- ======================= STAGE 3: SLOUGHING ======================= -->
+  <g id="stage3" transform="translate(810,10)">
+    <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
+    <!-- lubrication water layer on the wall -->
+    <path id="filmWall3" fill="none" stroke="#74b3d8" stroke-width="11"
+          d="M101,0 C96,60 106,110 100,160 C95,210 107,260 101,310
+             C96,360 106,410 100,460 C96,510 105,550 101,580"/>
+    <!-- thin frost sliver detaching from the wall -->
+    <path id="frost3" fill="url(#frostPat)" stroke="#a9cede" stroke-width="1.5"
+          d="M108,0 C120,40 112,80 122,120 C130,160 114,200 124,240
+             C132,280 116,320 124,360 C130,400 115,440 123,480
+             C129,515 116,550 122,580 L108,580 Z"/>
+    <rect id="wall3" x="0" y="0" width="95" height="580" fill="#9aa08f" stroke="#6f7465" stroke-width="1.5"/>
+    <rect x="0" y="0" width="370" height="580" fill="none" stroke="#555555" stroke-width="1.5"/>
+
+    <text x="47" y="42" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Surface</text>
+    <text x="47" y="66" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Wall</text>
+    <text x="312" y="48" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Air</text>
+    <text x="240" y="105" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Porous Frost</text>
+
+    <!-- sloughing arrow -->
+    <g id="sloughArrow3" fill="#8fb0bf" stroke="#3d5a68" stroke-width="2.5">
+      <path d="M226,130 L254,130 L254,205 L272,205 L240,248 L208,205 L226,205 Z"/>
+    </g>
+    <text x="240" y="298" text-anchor="middle" font-size="24" font-weight="bold" fill="#111111" letter-spacing="1">FROST</text>
+    <text x="240" y="330" text-anchor="middle" font-size="24" font-weight="bold" fill="#111111" letter-spacing="1">SLOUGHING</text>
+
+    <!-- callout -->
+    <line x1="106" y1="470" x2="136" y2="502" stroke="#111111" stroke-width="2.5"/>
+    <text x="140" y="516" font-size="19" font-weight="bold" fill="#111111">Melted Water</text>
+    <text x="140" y="540" font-size="19" font-weight="bold" fill="#111111">(Lubrication</text>
+    <text x="140" y="564" font-size="19" font-weight="bold" fill="#111111">Layer)</text>
+
+    <text x="185" y="625" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Stage 3:</text>
+    <text x="185" y="657" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Sloughing</text>
+  </g>
+
+  <!-- ==================== STAGE 4: RETENTION (END) ==================== -->
+  <g id="stage4" transform="translate(1210,10)">
+    <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
+    <!-- retained meltwater film -->
+    <path id="filmWall4" d="M100,0 L100,580" stroke="#74b3d8" stroke-width="9" fill="none"/>
+    <rect id="wall4" x="0" y="0" width="95" height="580" fill="#9aa08f" stroke="#6f7465" stroke-width="1.5"/>
+    <rect x="0" y="0" width="370" height="580" fill="none" stroke="#555555" stroke-width="1.5"/>
+
+    <text x="47" y="42" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Surface</text>
+    <text x="47" y="66" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Wall</text>
+    <text x="312" y="48" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Air</text>
+
+    <!-- retention bracket -->
+    <path d="M112,265 L180,265 L180,455 L112,455" fill="none" stroke="#111111" stroke-width="2.5"/>
+    <text x="192" y="332" font-size="20" font-weight="bold" fill="#111111">Retention</text>
+    <text x="192" y="360" font-size="20" font-weight="bold" fill="#111111">of melted</text>
+    <text x="192" y="388" font-size="20" font-weight="bold" fill="#111111">water</text>
+
+    <text x="185" y="625" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Stage 4:</text>
+    <text x="185" y="657" text-anchor="middle" font-size="26" font-weight="bold" fill="#111111">Retention (End)</text>
+  </g>
+</svg>

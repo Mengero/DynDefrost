@@ -5,7 +5,7 @@
   Open in Inkscape / Illustrator / Affinity Designer to edit.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     width="1590" height="690" viewBox="0 0 1590 690" font-family="Helvetica, Arial, sans-serif">
+     width="1590" height="780" viewBox="0 0 1590 780" font-family="Helvetica, Arial, sans-serif">
 
   <defs>
     <!-- Air: light near the frost, deeper orange toward the right -->
@@ -24,6 +24,12 @@
       <ellipse cx="4" cy="23" rx="3" ry="1.8" fill="#bcdcec" transform="rotate(10 4 23)"/>
     </pattern>
 
+    <!-- Arrowhead for process-flow arrows -->
+    <marker id="flowArrow" orient="auto" markerUnits="userSpaceOnUse"
+            markerWidth="18" markerHeight="14" refX="15" refY="7">
+      <path d="M0,0 L16,7 L0,14 Z" fill="#111111"/>
+    </marker>
+
     <!-- Red wavy heat-flux arrow, pointing right; reuse with <use>, mirror with scale(-1,1) -->
     <g id="wavyArrowR">
       <path d="M0,0 q6,-7 12,0 t12,0 t12,0 t12,0" stroke="#e01f1f" stroke-width="4"
@@ -32,8 +38,22 @@
     </g>
   </defs>
 
+  <!-- ============ PROCESS FLOW (stage transitions & bypass) ============ -->
+  <g id="flow" stroke="#111111" fill="none">
+    <line id="flow12" x1="381" y1="390" x2="404" y2="390" stroke-width="3.5" marker-end="url(#flowArrow)"/>
+    <line id="flow23" x1="781" y1="390" x2="804" y2="390" stroke-width="3.5" marker-end="url(#flowArrow)"/>
+    <line id="flow34" x1="1181" y1="390" x2="1204" y2="390" stroke-width="3.5" marker-end="url(#flowArrow)"/>
+    <!-- bypass: sloughing criterion not met, skip Stage 3 -->
+    <path id="flowBypass" d="M595,95 Q995,10 1391,90" stroke-width="3"
+          stroke-dasharray="9,7" marker-end="url(#flowArrow)"/>
+  </g>
+  <text id="cond23" x="795" y="88" text-anchor="middle" font-size="16"
+        font-style="italic" fill="#111111">h<tspan font-size="11" dy="4">frost</tspan><tspan dy="-4"> &gt; h</tspan><tspan font-size="11" dy="4">crit</tspan></text>
+  <text id="condBypass" x="995" y="38" text-anchor="middle" font-size="17"
+        font-style="italic" fill="#111111">h<tspan font-size="12" dy="4">frost</tspan><tspan dy="-4"> &#8804; h</tspan><tspan font-size="12" dy="4">crit</tspan><tspan dy="-4">: no sloughing &#8212; frost fully melts and drains</tspan></text>
+
   <!-- ======================= STAGE 1: INITIAL ======================= -->
-  <g id="stage1" transform="translate(10,10)">
+  <g id="stage1" transform="translate(10,100)">
     <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
     <path id="frost1" fill="url(#frostPat)" stroke="#a9cede" stroke-width="1.5"
           d="M95,0 L238,0 C246,40 232,80 240,120 C248,160 231,200 239,240
@@ -64,7 +84,7 @@
   </g>
 
   <!-- =================== STAGE 2: MELTING &amp; SOAKING =================== -->
-  <g id="stage2" transform="translate(410,10)">
+  <g id="stage2" transform="translate(410,100)">
     <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
     <path id="frost2" fill="url(#frostPat)" stroke="#a9cede" stroke-width="1.5"
           d="M95,0 L238,0 C246,40 232,80 240,120 C248,160 231,200 239,240
@@ -120,7 +140,7 @@
   </g>
 
   <!-- ======================= STAGE 3: SLOUGHING ======================= -->
-  <g id="stage3" transform="translate(810,10)">
+  <g id="stage3" transform="translate(810,100)">
     <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
     <!-- lubrication water layer on the wall -->
     <path id="filmWall3" fill="none" stroke="#74b3d8" stroke-width="11"
@@ -157,7 +177,7 @@
   </g>
 
   <!-- ==================== STAGE 4: RETENTION (END) ==================== -->
-  <g id="stage4" transform="translate(1210,10)">
+  <g id="stage4" transform="translate(1210,100)">
     <rect x="95" y="0" width="275" height="580" fill="url(#airGrad)"/>
     <!-- retained meltwater film -->
     <path id="filmWall4" d="M100,0 L100,580" stroke="#74b3d8" stroke-width="9" fill="none"/>

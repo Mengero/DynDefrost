@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Force balance at sloughing (Eqs. 36-39): gravitational force on the
+  frost-water mixture vs adhesive resistance at the substrate interface.
+  Same visual language as defrost_stages_schematic.svg; editable in
+  Inkscape / Illustrator.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="860" height="660" viewBox="0 0 860 660" font-family="Helvetica, Arial, sans-serif">
+
+  <defs>
+    <linearGradient id="airGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbe3c6"/>
+      <stop offset="1" stop-color="#f2ad7b"/>
+    </linearGradient>
+
+    <pattern id="frostPat" width="28" height="28" patternUnits="userSpaceOnUse">
+      <rect width="28" height="28" fill="#ddeef6"/>
+      <ellipse cx="6" cy="7" rx="4" ry="2.5" fill="#ffffff" transform="rotate(20 6 7)"/>
+      <ellipse cx="19" cy="4" rx="3" ry="2" fill="#bcdcec" transform="rotate(-15 19 4)"/>
+      <ellipse cx="14" cy="16" rx="4.5" ry="2.5" fill="#cde7f2" transform="rotate(35 14 16)"/>
+      <ellipse cx="23" cy="22" rx="3" ry="2" fill="#ffffff" transform="rotate(-30 23 22)"/>
+      <ellipse cx="4" cy="23" rx="3" ry="1.8" fill="#bcdcec" transform="rotate(10 4 23)"/>
+    </pattern>
+
+    <!-- adhesion arrow (upward), fixed size -->
+    <marker id="adhHead" orient="auto" markerUnits="userSpaceOnUse"
+            markerWidth="16" markerHeight="12" refX="13" refY="6">
+      <path d="M0,0 L14,6 L0,12 Z" fill="#1a5f8a"/>
+    </marker>
+    <!-- generic black arrowhead for dimension/leader lines -->
+    <marker id="dimHead" orient="auto" markerUnits="userSpaceOnUse"
+            markerWidth="14" markerHeight="10" refX="11" refY="5">
+      <path d="M0,0 L12,5 L0,10 Z" fill="#111111"/>
+    </marker>
+  </defs>
+
+  <!-- ============================ SCENE ============================ -->
+  <g id="scene">
+    <rect id="air" x="120" y="20" width="500" height="540" fill="url(#airGrad)"/>
+    <!-- porous frost slab -->
+    <path id="frost" fill="url(#frostPat)" stroke="#a9cede" stroke-width="1.5"
+          d="M134,20 L295,20 C303,60 289,100 297,140 C305,180 288,220 296,260
+             C304,300 290,340 298,380 C306,420 289,460 297,500
+             C303,530 291,548 297,560 L134,560 Z"/>
+    <!-- meltwater lubrication film at the substrate interface -->
+    <path id="film" d="M127,20 L127,560" stroke="#74b3d8" stroke-width="14" fill="none"/>
+    <rect id="wall" x="20" y="20" width="100" height="540" fill="#9aa08f" stroke="#6f7465" stroke-width="1.5"/>
+    <rect x="20" y="20" width="600" height="540" fill="none" stroke="#555555" stroke-width="1.5"/>
+
+    <text x="70" y="62" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Surface</text>
+    <text x="70" y="86" text-anchor="middle" font-size="20" font-weight="bold" fill="#2f342c">Wall</text>
+    <text x="215" y="62" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Porous</text>
+    <text x="215" y="86" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Frost</text>
+    <text x="555" y="52" text-anchor="middle" font-size="20" font-weight="bold" fill="#1c1c1c">Air</text>
+    <!-- effective density note inside the frost -->
+    <text x="215" y="180" text-anchor="middle" font-size="19" font-style="italic" fill="#1c1c1c">&#961;<tspan font-size="13" dy="5">eff</tspan></text>
+  </g>
+
+  <!-- ==================== h_tot DIMENSION (Eq. 40) ==================== -->
+  <g id="dimHtot">
+    <line x1="121" y1="120" x2="293" y2="120" stroke="#111111" stroke-width="2.5"
+          marker-end="url(#dimHead)"/>
+    <line x1="293" y1="120" x2="121" y2="120" stroke="#111111" stroke-width="2.5"
+          marker-end="url(#dimHead)"/>
+    <text x="210" y="110" text-anchor="middle" font-size="20" font-style="italic"
+          font-weight="bold" fill="#111111">h<tspan font-size="14" dy="5">tot</tspan></text>
+  </g>
+
+  <!-- ============== GRAVITATIONAL FORCE ON THE MIXTURE ============== -->
+  <g id="gravityForce">
+    <path d="M201,240 L229,240 L229,340 L247,340 L215,385 L183,340 L201,340 Z"
+          fill="#8fb0bf" stroke="#3d5a68" stroke-width="2.5"/>
+    <line x1="240" y1="395" x2="330" y2="430" stroke="#111111" stroke-width="2"/>
+    <text x="336" y="430" font-size="21" font-style="italic" fill="#111111">G<tspan font-size="15" dy="6">f</tspan><tspan dy="-6" font-style="normal"> = </tspan><tspan>h</tspan><tspan font-size="15" dy="6">tot</tspan><tspan dy="-6"> &#961;</tspan><tspan font-size="15" dy="6">eff</tspan><tspan dy="-6"> g</tspan></text>
+    <text x="336" y="458" font-size="16" fill="#333333">(weight of frost&#8211;water mixture)</text>
+  </g>
+
+  <!-- ============ ADHESIVE RESISTANCE AT THE INTERFACE ============ -->
+  <g id="adhesionForce">
+    <g stroke="#1a5f8a" stroke-width="4">
+      <line x1="140" y1="240" x2="140" y2="195" marker-end="url(#adhHead)"/>
+      <line x1="140" y1="330" x2="140" y2="285" marker-end="url(#adhHead)"/>
+      <line x1="140" y1="420" x2="140" y2="375" marker-end="url(#adhHead)"/>
+      <line x1="140" y1="510" x2="140" y2="465" marker-end="url(#adhHead)"/>
+    </g>
+    <line x1="150" y1="480" x2="330" y2="510" stroke="#111111" stroke-width="2"/>
+    <text x="336" y="510" font-size="21" font-style="italic" fill="#111111">F<tspan font-size="15" dy="6">adhesion</tspan><tspan dy="-6" font-style="normal"> = </tspan><tspan>k</tspan><tspan font-size="15" dy="6">r</tspan><tspan dy="-6"> &#964;</tspan><tspan font-size="15" dy="6">base</tspan><tspan dy="-6"> F(&#945;</tspan><tspan font-size="15" dy="6">H&#8322;O</tspan><tspan dy="-6">)</tspan></text>
+    <text x="336" y="538" font-size="16" fill="#333333">(adhesive resistance at the interface)</text>
+  </g>
+
+  <!-- ==================== MELTWATER FILM CALLOUT ==================== -->
+  <g id="filmCallout">
+    <line x1="130" y1="565" x2="130" y2="590" stroke="#111111" stroke-width="2"/>
+    <text x="142" y="600" font-size="17" fill="#111111">meltwater film, <tspan font-style="italic">&#945;</tspan><tspan font-size="13" dy="5" font-style="italic">H&#8322;O</tspan></text>
+  </g>
+
+  <!-- ==================== GRAVITY DIRECTION ==================== -->
+  <g id="gravityDir">
+    <line x1="575" y1="90" x2="575" y2="140" stroke="#111111" stroke-width="3" marker-end="url(#dimHead)"/>
+    <text x="590" y="122" font-size="21" font-style="italic" fill="#111111">g</text>
+  </g>
+
+  <!-- ==================== SLOUGHING CRITERION ==================== -->
+  <g id="criterion">
+    <rect x="640" y="230" width="200" height="140" rx="10" fill="#ffffff"
+          stroke="#3d5a68" stroke-width="2.5"/>
+    <text x="740" y="268" text-anchor="middle" font-size="19" font-weight="bold" fill="#111111">Sloughing when</text>
+    <text x="740" y="310" text-anchor="middle" font-size="22" font-style="italic" fill="#111111">G<tspan font-size="16" dy="6">f</tspan><tspan dy="-6" font-style="normal"> &gt; </tspan><tspan>F</tspan><tspan font-size="16" dy="6">adhesion</tspan></text>
+    <text x="740" y="350" text-anchor="middle" font-size="19" font-style="italic" fill="#111111">h<tspan font-size="14" dy="5">tot</tspan><tspan dy="-5"> &gt; h</tspan><tspan font-size="14" dy="5">crit</tspan></text>
+  </g>
+</svg>

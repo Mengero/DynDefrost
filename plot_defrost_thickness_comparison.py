@@ -419,7 +419,7 @@ def _draw_condition_panel(ax, label, cases, quantity, legend_loc='best'):
     ax.grid(True, alpha=0.3)
     for spine in ax.spines.values():
         spine.set_linewidth(2)
-    ax.set_box_aspect(1)
+    ax.set_box_aspect(0.42)
     ax.set_ylim(bottom=0)
     # Uniform one-decimal y ticks so panels align visually
     from matplotlib.ticker import FormatStrFormatter
@@ -432,36 +432,25 @@ def _draw_condition_panel(ax, label, cases, quantity, legend_loc='best'):
 
 
 def _plot_combined_condition_figure(quantity, ylabel, output_file,
-                                    output_dir='figure', figsize=(21, 13)):
+                                    output_dir='figure', figsize=(10, 22)):
     """
-    One paper-ready figure with a panel per ambient condition (2 rows x 3
-    columns, last cell unused), all experimental cases per panel.
+    One paper-ready figure with one panel per ambient condition, stacked in
+    a single column (5 rows), panel letters (a)-(e) at the top-left corner.
     """
     n_conditions = len(CONDITION_CASES)
-    n_cols = 3
-    n_rows = 2
 
-    fig, axs = plt.subplots(n_rows, n_cols, figsize=figsize)
-    axs = axs.ravel()
+    fig, axs = plt.subplots(n_conditions, 1, figsize=figsize)
+    axs = np.atleast_1d(axs).ravel()
 
     legend_loc = 'lower left' if quantity == 'h_total' else 'upper left'
-    for ax, (label, cases) in zip(axs, CONDITION_CASES.items()):
+    for i, (ax, (label, cases)) in enumerate(zip(axs, CONDITION_CASES.items())):
         print(f"\n{label}:")
         _draw_condition_panel(ax, label, cases, quantity, legend_loc)
-
-    # Hide unused cells
-    for ax in axs[n_conditions:]:
-        ax.set_visible(False)
-
-    # Axis labels: y on left column, x on the lowest visible panel per column
-    for row in range(n_rows):
-        axs[row * n_cols].set_ylabel(ylabel, fontsize=20, fontweight='bold')
-    for col in range(n_cols):
-        visible = [row * n_cols + col for row in range(n_rows)
-                   if row * n_cols + col < n_conditions]
-        if visible:
-            axs[visible[-1]].set_xlabel('Defrost Time (min)',
-                                        fontsize=20, fontweight='bold')
+        # Panel letter at the top-left corner
+        ax.text(0.022, 0.94, f'({chr(97 + i)})', transform=ax.transAxes,
+                fontsize=20, fontweight='bold', va='top')
+        ax.set_ylabel(ylabel, fontsize=20, fontweight='bold')
+    axs[-1].set_xlabel('Defrost Time (min)', fontsize=20, fontweight='bold')
 
     plt.tight_layout()
 

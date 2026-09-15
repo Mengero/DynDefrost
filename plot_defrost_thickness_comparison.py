@@ -439,7 +439,7 @@ def _plot_combined_condition_figure(quantity, ylabel, output_file,
     """
     n_conditions = len(CONDITION_CASES)
 
-    fig, axs = plt.subplots(n_conditions, 1, figsize=figsize)
+    fig, axs = plt.subplots(n_conditions, 1, figsize=figsize, sharex=True)
     axs = np.atleast_1d(axs).ravel()
 
     legend_loc = 'lower left' if quantity == 'h_total' else 'upper left'

@@ -414,8 +414,8 @@ def _draw_condition_panel(ax, label, cases, quantity, legend_loc='best'):
         print(f"  {case}: {outcome}s" if outcome == 'slough'
               else f"  {case}: no sloughing")
 
-    ax.set_title(label, fontsize=20, fontweight='bold')
-    ax.tick_params(axis='both', labelsize=20, direction='in')
+    ax.set_title(label, fontsize=15, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=13, direction='in')
     ax.grid(True, alpha=0.3)
     for spine in ax.spines.values():
         spine.set_linewidth(2)
@@ -427,7 +427,7 @@ def _draw_condition_panel(ax, label, cases, quantity, legend_loc='best'):
     # Two columns keep the thickness legends short so they clear the lowest
     # curve; the wall-water legends sit in empty space and stay single-column
     n_cols_legend = 2 if quantity == 'h_total' else 1
-    ax.legend(fontsize=13, frameon=False, loc=legend_loc, ncol=n_cols_legend,
+    ax.legend(fontsize=11, frameon=False, loc=legend_loc, ncol=n_cols_legend,
               columnspacing=1.0, handletextpad=0.5)
 
 
@@ -447,10 +447,10 @@ def _plot_combined_condition_figure(quantity, ylabel, output_file,
         print(f"\n{label}:")
         _draw_condition_panel(ax, label, cases, quantity, legend_loc)
         # Panel letter outside the axes, top-left
-        ax.text(-0.145, 1.14, f'({chr(97 + i)})', transform=ax.transAxes,
-                fontsize=20, fontweight='bold', va='top')
-        ax.set_ylabel(ylabel, fontsize=20, fontweight='bold')
-    axs[-1].set_xlabel('Defrost Time (min)', fontsize=20, fontweight='bold')
+        ax.text(-0.10, 1.14, f'({chr(97 + i)})', transform=ax.transAxes,
+                fontsize=15, fontweight='bold', va='top')
+        ax.set_ylabel(ylabel, fontsize=15, fontweight='bold')
+    axs[-1].set_xlabel('Defrost Time (min)', fontsize=15, fontweight='bold')
 
     plt.tight_layout()
 

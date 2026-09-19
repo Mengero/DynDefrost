@@ -449,6 +449,14 @@ def _plot_combined_condition_figure(quantity, ylabel, output_file,
         # Panel letter outside the axes, top-left
         ax.text(-0.10, 1.14, f'({chr(97 + i)})', transform=ax.transAxes,
                 fontsize=15, fontweight='bold', va='top')
+        # Condition annotation inside the panel, top-right
+        import re
+        m = re.match(r'(\w+) (\d+)\u00b0C (\d+)%RH', label)
+        surf, t_air, rh = m.groups()
+        angle = '60\u00b0' if surf == 'Hydrophilic' else '140\u00b0'
+        ax.text(0.985, 0.94,
+                f'\u03b8 = {angle},  T$_{{air}}$ = {t_air} \u00b0C,  RH = {rh}%',
+                transform=ax.transAxes, ha='right', va='top', fontsize=12)
         ax.set_ylabel(ylabel, fontsize=15, fontweight='bold')
         ax.set_xlabel('Defrost Time (min)', fontsize=15, fontweight='bold')
         ax.tick_params(labelbottom=True)
